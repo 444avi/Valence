@@ -1,0 +1,5 @@
+# Dev/deploy dependencies. Installed on the server too, because the
+# valence-api systemd unit runs `pytest tests/ -q` in ExecStartPre as a
+# regression gate (plan §10) — a silent fee-model regression costs money.
+-r requirements.txt
+pytest>=8.0.0

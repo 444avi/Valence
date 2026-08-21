@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Valence arbitrage screener host. A single always-on ARM instance reachable only
+  through a Cloudflare Tunnel (outbound-only), so the security group has zero
+  inbound rules. Includes a scoped instance role, an S3 backup bucket, a status
+  check alarm, and a monthly cost budget. No ALB, no NAT gateway, no inbound path.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Default VPC id.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet id in the chosen VPC.
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small]
+    Description: t4g.small is the safe default. t4g.micro halves cost but needs swap for arb.max.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Amazon Linux 2023 arm64, resolved at deploy time.
+  AlertEmail:
+    Type: String
+    Description: Address for status-check and budget alerts. Confirm the SNS subscription email.
+  AnthropicSsmParamName:
+    Type: String
+    Default: /valence/anthropic-api-key
+    Description: Name of the SecureString created out of band (not managed by this template).
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 30
+    Description: Monthly cost budget threshold in USD.
+
+Resources:
+
+  # Zero inbound rules. Egress open so cloudflared can dial out and the app can
+  # reach the Anthropic and market APIs. Adding an ingress rule breaks the
+  # security invariant that makes the Access email header trustworthy.
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Valence host - no inbound, outbound only
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: valence-sg
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: valence-instance-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # Session Manager shell access, so no port 22 and no SSH keys.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: valence-scoped
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadValenceParams
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/valence/*
+              - Sid: DecryptParams
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              - Sid: WriteBackups
+                Effect: Allow
+                Action: [s3:PutObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt BackupBucket.Arn
+                  - !Sub ${BackupBucket.Arn}/*
+              - Sid: SendFailureAlerts
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: "*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref InstanceSecurityGroup]
+      # IMDSv2 required (Well-Architected security default).
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: valence
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf -y update
+          dnf -y install git python3.12 python3.12-pip sqlite
+          id valence >/dev/null 2>&1 || useradd --system --home /opt/valence --shell /usr/sbin/nologin valence
+          install -d -o valence -g valence /var/lib/valence /opt/valence
+          # App deploy (clone, venv, systemd enable) is done manually per
+          # deploy/README.md so a bad rollout never bricks the boot.
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-backups
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 }
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: valence-alerts
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # Instance status check failed -> SNS (plan section 9, step 7).
+  StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: valence-status-check-failed
+      AlarmDescription: EC2 status check failed for the Valence host
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: valence-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  InstanceId:
+    Description: Connect with - aws ssm start-session --target <id>
+    Value: !Ref Instance
+  BackupBucketName:
+    Value: !Ref BackupBucket
+  AlertTopicArn:
+    Value: !Ref AlertTopic

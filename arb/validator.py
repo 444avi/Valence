@@ -85,9 +85,10 @@ resolve on the same event with equivalent payoffs — not whether it is \
 profitable."""
 
 
-def validate(
+def _call_model(
     opp: ArbOpportunity, client: anthropic.Anthropic | None = None
 ) -> Validation:
+    """One real Claude call. No caching — this is the cost-bearing path."""
     client = client or anthropic.Anthropic()
     resp = client.messages.create(
         model=MODEL,
@@ -105,3 +106,30 @@ def validate(
         reasoning=str(data["reasoning"]),
         caveats=list(data.get("caveats", [])),
     )
+
+
+def validate(
+    opp: ArbOpportunity, client: anthropic.Anthropic | None = None
+) -> Validation:
+    """Validate a pair, consulting the cross-run cache when one is configured.
+
+    With no cache configured (VALENCE_DB unset — the CLI and test default) this
+    is exactly a single `_call_model`. When the web job runner configures a
+    cache, a hit returns the stored verdict for free and a miss calls the model,
+    stores the verdict, and increments the run's real-call counter — so the
+    counter reflects actual API calls, never cache hits (see arb/valcache.py).
+    """
+    from . import valcache
+
+    cache = valcache.from_env()
+    if cache is None:
+        return _call_model(opp, client)
+    try:
+        hit = cache.lookup(opp)
+        if hit is not None:
+            return hit
+        result = _call_model(opp, client)  # cost incurred only here
+        cache.store(opp, result, MODEL)
+        return result
+    finally:
+        cache.close()

@@ -1,0 +1,46 @@
+# /etc/systemd/system/valence-api.service
+# Always-on FastAPI job runner. Runs the test suite before starting (a fee-model
+# regression fails silently and costs money, so it must gate the boot: plan
+# guardrails). Fetches the Anthropic key from SSM into a 0600 EnvironmentFile via
+# ExecStartPre so no plaintext .env lives on the box.
+[Unit]
+Description=Valence arbitrage screener API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=valence
+Group=valence
+WorkingDirectory=/opt/valence
+Environment=VALENCE_HOME=/var/lib/valence
+# Optional cross-run cache TTL (days); belt-and-suspenders on the full-text hash.
+Environment=VALENCE_CACHE_TTL_DAYS=60
+
+# Regression gate: refuse to (re)start on a failing suite. See plan section 10.
+ExecStartPre=/opt/valence/.venv/bin/python -m pytest tests/ -q
+
+# Materialize the secret from SSM Parameter Store into a private EnvironmentFile.
+# The leading '-' makes the file optional at load time: systemd resolves
+# EnvironmentFile before ExecStartPre runs, so on the first start the file does
+# not exist yet. It is re-read for the ExecStart command after fetch-secret.sh
+# has written it, so ExecStart still gets ANTHROPIC_API_KEY.
+ExecStartPre=/opt/valence/deploy/scripts/fetch-secret.sh
+EnvironmentFile=-/run/valence/env
+
+ExecStart=/opt/valence/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8080
+
+Restart=always
+RestartSec=3
+
+# Hardening: the box is a screener with no execution credentials (plan section 10).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/valence /run/valence
+RuntimeDirectory=valence
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

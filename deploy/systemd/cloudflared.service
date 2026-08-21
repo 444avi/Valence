@@ -1,0 +1,22 @@
+# /etc/systemd/system/cloudflared.service
+# Named Cloudflare Tunnel. Dials OUTBOUND to Cloudflare, so the EC2 security
+# group needs zero inbound rules and there is no ALB, no public IP path, no
+# exposed SSH. This outbound-only posture is a security invariant, not just a
+# cost choice: it is what makes the Cf-Access-Authenticated-User-Email header
+# unforgeable (plan section 10). Do not add an inbound rule.
+[Unit]
+Description=Cloudflare Tunnel for Valence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cloudflared
+Group=cloudflared
+# Credentials + ingress live in /etc/cloudflared/config.yml (see the example).
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
