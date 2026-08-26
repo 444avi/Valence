@@ -23,6 +23,13 @@ RUNS_DIR = HOME / "runs"
 # full-text question_hash; unset = no TTL. See arb/valcache.py and plan §8.
 CACHE_TTL_DAYS = os.environ.get("VALENCE_CACHE_TTL_DAYS", "") or None
 
+# Optional hard wall-clock ceiling for a single job (seconds). OFF by default
+# (0 = no timeout) — nothing is imposed unless you opt in by setting
+# VALENCE_JOB_TIMEOUT_SECONDS. When set, a run that exceeds it is killed and
+# marked failed (see web/jobs.py:supervise): a safety valve for a wedged job, not
+# a default limit.
+JOB_TIMEOUT_SECONDS = int(os.environ.get("VALENCE_JOB_TIMEOUT_SECONDS") or "0")
+
 # Header Cloudflare Access injects with the authenticated user's email. Trusted
 # only because the origin is unreachable except through the tunnel (plan §10).
 ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email"

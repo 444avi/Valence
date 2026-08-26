@@ -29,6 +29,7 @@ function collectArgs() {
     if (num("min_profit")) args.min_profit = num("min_profit");
   } else {
     args.section = $("section").value;
+    if (num("min_volume")) args.min_volume = num("min_volume");
   }
   if (num("size")) args.size = num("size");
   if (num("max_validations") !== null) args.max_validations = num("max_validations");
@@ -102,6 +103,7 @@ function argSummary(args) {
   const parts = [];
   if (args.section) parts.push("section=" + args.section);
   if (args.sections) parts.push(args.sections);
+  if (args.min_volume != null) parts.push("minvol=$" + args.min_volume);
   if (args.no_llm) parts.push("no-llm");
   if (args.max_validations != null) parts.push("mv=" + args.max_validations);
   return parts.join(" · ") || "defaults";

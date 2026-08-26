@@ -101,6 +101,7 @@ fee-aware math working, not a missed opportunity.
 .venv/bin/python -m arb.max --section crypto            # comprehensive check
 .venv/bin/python -m arb.max --section tech --no-llm     # free: heuristic only
 .venv/bin/python -m arb.max --section politics --max-validations 30
+.venv/bin/python -m arb.max --section politics --min-volume 1000   # wider, slower
 .venv/bin/python -m arb.max --section sports --json > sports_coverage.json
 ```
 
@@ -108,14 +109,24 @@ Where the batch scanner samples, `arb.max` is **comprehensive within one
 section** ([arb/max.py](arb/max.py)):
 
 1. Fetch *everything* in the section from both platforms (no caps; Gamma's
-   ~2000-event pagination limit is the only bound, and events are
-   volume-ordered so the tail is dust).
-2. Count distinct **events** per platform; the platform with fewer events is
+   ~2000-event pagination limit is the only bound).
+2. **Drop untradeable dust** below `--min-volume` (default **$10k**). A market
+   with no volume can never be an executable arb leg, yet on a big section the
+   dust is the overwhelming majority of the comparison cost — politics alone is
+   ~34k markets, roughly **half of them $0-volume** (median ~$19). The floor is
+   clamped to $1 so the $0 dust is always excluded; lower `--min-volume` toward
+   $1 for wider (and much slower) coverage.
+3. Count distinct **events** per platform; the platform with fewer events is
    the "small" side.
-3. For **every** event on the small side, find the best heuristic counterpart
+4. For **every** event on the small side, find the best heuristic counterpart
    market on the large side (same matcher + guards; default threshold 0.4,
-   looser than the batch scanner since the LLM checks everything).
-4. LLM-verify **every** matched pair — same-event + equivalent-payoff + arb at
+   looser than the batch scanner since the LLM checks everything). Matching is
+   **blocked on shared tokens** and skips the expensive sequence-ratio on any
+   pair a cheap upper bound already rules out, so it stays near-linear instead of
+   comparing all pairs — an *exact* optimization (identical results), just fast
+   enough that a full politics run finishes in minutes instead of hours (see
+   [arb/matcher.py](arb/matcher.py)).
+5. LLM-verify **every** matched pair — same-event + equivalent-payoff + arb at
    current prices. Uncapped by default; the match count is printed before
    verification starts as a cost signal (`--max-validations N` caps it,
    highest-profit pairs first).
@@ -130,6 +141,7 @@ unmatched list.
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--section` | required | One of `politics,sports,crypto,finance,tech,culture` |
+| `--min-volume` | 10000 | Drop markets below this volume ($) before matching; floor $1 |
 | `--similarity` | 0.4 | Heuristic match threshold (looser; LLM gates after) |
 | `--max-validations` | 0 (all) | Cap LLM calls, highest-profit pairs first |
 | `--size` | 1 | Order size (contracts) for per-contract economics |
@@ -338,7 +350,7 @@ SIZE: max ~150 pairs  (edge-exhaustion 152, depth ceiling 200, book cap 200)
 arb/
   categories.py  # canonical sections + per-platform taxonomy mapping
   sources.py     # fetch + normalize markets (Polymarket Gamma, Kalshi /events)
-  matcher.py     # heuristic text matching within sections -> candidate pairs
+  matcher.py     # heuristic text matching (token-index blocking) -> candidate pairs
   fees.py        # platform fee models
   arbitrage.py   # two-leg arb math, net of fees
   validator.py   # Claude Sonnet 4.6 (low effort) structured validation

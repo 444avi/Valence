@@ -135,6 +135,7 @@ JOB_TYPES: dict[str, JobType] = {
         flags={
             "section": FlagSpec("--section", "section", required=True),
             "size": FlagSpec("--size", "int"),
+            "min_volume": FlagSpec("--min-volume", "float"),
             "max_validations": FlagSpec("--max-validations", "int"),
             "no_llm": FlagSpec("--no-llm", "bool"),
         },
@@ -224,13 +225,35 @@ async def supervise(run_id: str, argv: list[str]) -> None:
         return
 
     _running[run_id] = proc
+    timed_out = False
     try:
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=config.JOB_TIMEOUT_SECONDS or None
+            )
+        except asyncio.TimeoutError:
+            # Exceeded the wall-clock ceiling: kill it and drain the pipes so the
+            # subprocess can't linger. Reported as failed (distinct from a user
+            # cancel), with the reason in the stderr log.
+            timed_out = True
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            stdout, stderr = await proc.communicate()
     finally:
         _running.pop(run_id, None)
 
-    errlog.write_bytes(stderr or b"")
+    stderr = stderr or b""
+    if timed_out:
+        stderr += (f"\n[killed: exceeded VALENCE_JOB_TIMEOUT_SECONDS="
+                   f"{config.JOB_TIMEOUT_SECONDS}s]\n").encode()
+    errlog.write_bytes(stderr)
     code = proc.returncode
+
+    if timed_out:
+        db.finish_run(run_id, "failed", code, None)
+        return
 
     # A killed process (cancel) returns a negative code from a signal; mark it
     # cancelled rather than failed so the UI reads correctly. The DELETE handler

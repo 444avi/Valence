@@ -63,6 +63,25 @@ def test_unknown_type_rejected(client):
     assert r.status_code == 400
 
 
+def test_max_min_volume_flows_to_argv(client):
+    """The UI's Min-market-volume field is whitelisted for max and rendered to
+    --min-volume, so a value chosen in the UI actually reaches the subprocess."""
+    from web import jobs
+    argv, clean = jobs.build_argv(
+        "max", {"section": "crypto", "min_volume": "50000", "no_llm": True}
+    )
+    assert "--min-volume" in argv
+    assert float(argv[argv.index("--min-volume") + 1]) == 50000.0
+    assert clean["min_volume"] == "50000"
+
+
+def test_scan_rejects_min_volume(client):
+    # min_volume is a max-only flag; scan must not silently accept it.
+    r = client.post("/runs", json={"type": "scan", "args": {"min_volume": "5000"}})
+    assert r.status_code == 400
+    assert "does not accept" in r.json()["detail"]
+
+
 # ------------------------------------------------------------- lifecycle
 
 def test_launch_records_attribution_and_completes(client):

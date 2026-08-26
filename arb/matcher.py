@@ -23,6 +23,14 @@ _STOPWORDS = {
 _TOKEN_RE = re.compile(r"[a-z0-9$%.]+")
 _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 
+# Tokenization is memoized per question string. The bound must comfortably
+# exceed the number of DISTINCT questions in a single run, or a large
+# same-section sweep (e.g. `arb.max --section politics`, ~34k markets) thrashes
+# the cache and recomputes tokens on nearly every similarity() call. It stays
+# bounded (not maxsize=None) so the long-lived `arb.live` monitor can't grow it
+# without limit as markets churn over days.
+_CACHE_MAX = 1 << 18  # 262144
+
 # Cross-platform team-name aliases (Kalshi says "USA", Polymarket "United
 # States", etc.). Expanded in-place so both spellings produce the same tokens.
 _ALIASES: dict[str, tuple[str, ...]] = {
@@ -39,12 +47,12 @@ def _stem(t: str) -> str:
     return t
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_CACHE_MAX)
 def _normalize(text: str) -> str:
     return text.lower().strip()
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_CACHE_MAX)
 def _token_list(text: str) -> tuple[str, ...]:
     """Ordered token list with aliases expanded and plurals stemmed."""
     out: list[str] = []
@@ -54,14 +62,14 @@ def _token_list(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_CACHE_MAX)
 def _tokens(text: str) -> frozenset[str]:
     return frozenset(
         t for t in _token_list(text) if t not in _STOPWORDS and len(t) > 1
     )
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_CACHE_MAX)
 def _significant(text: str) -> frozenset[str]:
     """Tokens that carry event identity: numbers, years, and longer words."""
     return frozenset(
@@ -70,18 +78,20 @@ def _significant(text: str) -> frozenset[str]:
     )
 
 
-def similarity(a: Market, b: Market) -> float:
-    """Blend of token Jaccard and sequence ratio over the question text."""
-    ta, tb = _tokens(a.question), _tokens(b.question)
-    if not ta or not tb:
-        return 0.0
-    shared = ta & tb
-    # Quick reject: no shared tokens => not the same event. Skips the expensive
-    # SequenceMatcher for the overwhelming majority of pairs.
-    if not shared:
-        return 0.0
-    jaccard = len(shared) / len(ta | tb)
-    seq = SequenceMatcher(None, _normalize(a.question), _normalize(b.question)).ratio()
+@lru_cache(maxsize=_CACHE_MAX)
+def _years(text: str) -> frozenset[str]:
+    """Distinct 20xx years in a market's text blob, cached per market so the
+    regex over (often long) resolution descriptions runs once, not once per pair.
+    That per-pair regex was a big share of similarity()'s cost on large sweeps."""
+    return frozenset(_YEAR_RE.findall(text))
+
+
+def _finish_score(a: Market, b: Market, shared: frozenset[str],
+                  jaccard: float, seq: float) -> float:
+    """Combine token Jaccard + sequence ratio into the final score, applying the
+    significant-token bonus and the year / draw / versus penalties. Split out of
+    similarity() so the quick_ratio gate (similarity_ge) can share it once it has
+    decided the pair is worth the exact ratio()."""
     score = 0.6 * jaccard + 0.4 * seq
 
     # A shared significant token (e.g. a name, year, or number) is strong
@@ -90,8 +100,7 @@ def similarity(a: Market, b: Market) -> float:
         score = min(1.0, score + 0.1)
 
     # Mismatched years almost always means different events — penalize hard.
-    ya = set(_YEAR_RE.findall(a.text_blob()))
-    yb = set(_YEAR_RE.findall(b.text_blob()))
+    ya, yb = _years(a.text_blob()), _years(b.text_blob())
     if ya and yb and not (ya & yb):
         score *= 0.5
 
@@ -114,6 +123,47 @@ def similarity(a: Market, b: Market) -> float:
             score *= 0.25
 
     return score
+
+
+def similarity(a: Market, b: Market) -> float:
+    """Blend of token Jaccard and sequence ratio over the question text."""
+    ta, tb = _tokens(a.question), _tokens(b.question)
+    if not ta or not tb:
+        return 0.0
+    shared = ta & tb
+    # Quick reject: no shared tokens => not the same event. Skips the expensive
+    # SequenceMatcher for the overwhelming majority of pairs.
+    if not shared:
+        return 0.0
+    jaccard = len(shared) / len(ta | tb)
+    seq = SequenceMatcher(None, _normalize(a.question), _normalize(b.question)).ratio()
+    return _finish_score(a, b, shared, jaccard, seq)
+
+
+def similarity_ge(a: Market, b: Market, threshold: float) -> float:
+    """Exact similarity(a, b) when it is >= threshold; otherwise a value < threshold.
+
+    Skips the O(n^2) SequenceMatcher.ratio() whenever the cheap O(n) quick_ratio()
+    upper bound already proves the score can't reach `threshold`. quick_ratio() >=
+    ratio(), and every adjustment in _finish_score except the +0.1 significant-token
+    bonus only *reduces* the score, so `0.6*jaccard + 0.4*quick_ratio (+0.1)` is a
+    true upper bound on the final score. Matching that only cares whether a pair
+    clears a positive threshold therefore gets results identical to similarity().
+    """
+    ta, tb = _tokens(a.question), _tokens(b.question)
+    if not ta or not tb:
+        return 0.0
+    shared = ta & tb
+    if not shared:
+        return 0.0
+    jaccard = len(shared) / len(ta | tb)
+    sm = SequenceMatcher(None, _normalize(a.question), _normalize(b.question))
+    ub = 0.6 * jaccard + 0.4 * sm.quick_ratio()
+    if _significant(a.question) & _significant(b.question):
+        ub = min(1.0, ub + 0.1)
+    if ub < threshold:
+        return 0.0
+    return _finish_score(a, b, shared, jaccard, sm.ratio())
 
 
 _DRAW_WORDS = {"draw", "tie", "drawn", "tied"}
@@ -150,6 +200,50 @@ def _bucket(markets: list[Market]) -> dict[str, list[Market]]:
         if m.tradeable() and m.question and m.category:
             out.setdefault(m.category, []).append(m)
     return out
+
+
+# --- Blocking (candidate generation) ---------------------------------------
+# similarity() returns 0.0 for any pair that shares no post-stopword token (the
+# quick-reject inside it). So an exhaustive all-pairs scan spends almost all of
+# its work scoring pairs that can only ever score zero — quadratic and, on a big
+# same-section set like politics (~21k x ~12k = 260M pairs), effectively
+# non-terminating. These two helpers let a caller score each market against only
+# the markets that share >=1 token with it. It is an EXACT optimization: every
+# pair it skips would have scored 0.0 (below any threshold > 0), so the set of
+# matches above threshold is unchanged.
+
+def token_index(markets: list[Market]) -> dict[str, list[tuple[int, Market]]]:
+    """Inverted index: token -> [(position, market), ...] for markets carrying it.
+
+    Keyed on the same `_tokens` that `similarity` uses for its shared-token test,
+    so the candidates it drives are exactly the markets that can score > 0.
+    Positions are the market's index in `markets`; `candidates` uses them to
+    return hits in the original list order, preserving the exact tie-break of a
+    plain `for lg in markets` scan (first-seen wins on equal similarity).
+    """
+    idx: dict[str, list[tuple[int, Market]]] = {}
+    for pos, m in enumerate(markets):
+        for tok in _tokens(m.question):
+            idx.setdefault(tok, []).append((pos, m))
+    return idx
+
+
+def candidates(index: dict[str, list[tuple[int, Market]]], m: Market) -> list[Market]:
+    """Markets in `index` sharing >=1 token with `m`, de-duplicated and returned
+    in the indexed list's original order.
+
+    Any market NOT returned shares no token with `m` and would score exactly 0.0
+    in `similarity`, so skipping it never changes a match above threshold > 0.
+    """
+    seen: set[int] = set()
+    hits: list[tuple[int, Market]] = []
+    for tok in _tokens(m.question):
+        for pos, cand in index.get(tok, ()):
+            if pos not in seen:
+                seen.add(pos)
+                hits.append((pos, cand))
+    hits.sort(key=lambda pm: pm[0])
+    return [cand for _, cand in hits]
 
 
 def find_matches(

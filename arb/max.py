@@ -2,11 +2,18 @@
 
 Within a selected canonical section:
   1. Fetch EVERYTHING from both platforms (no per-section caps).
-  2. Count distinct events per platform; the platform with FEWER events is the
+  2. Drop markets below --min-volume (default $10k): a market with no volume can
+     never be an executable arb leg, and on a big section the untradeable dust is
+     the overwhelming majority of the O(N^2) comparison cost (politics is ~half
+     $0-volume markets). Lower the floor toward $1 for wider, slower coverage.
+  3. Count distinct events per platform; the platform with FEWER events is the
      "small" side — every one of its events gets checked.
-  3. For every event on the small side, heuristically find the best counterpart
+  4. For every event on the small side, heuristically find the best counterpart
      market on the large side (same matcher + guards as the other pipelines).
-  4. LLM-verify every matched pair with Claude Sonnet 4.6 (low effort):
+     Comparison is via matcher.token_index/candidates + similarity_ge, so it only
+     scores markets that share a token and skips the O(n^2) ratio() on pairs a
+     cheap upper bound already rules out — near-linear instead of all-pairs.
+  5. LLM-verify every matched pair with Claude Sonnet 4.6 (low effort):
      same event + equivalent payoff, and whether an arb exists at current
      prices. Uncapped by default — this is the comprehensive mode — so the
      event count is printed up front as a cost signal; --max-validations N
@@ -58,14 +65,23 @@ def match_events(
     large_markets: list[Market],
     threshold: float,
 ) -> tuple[dict[str, CandidateMatch], list[str]]:
-    """Best counterpart pair for every small-side event; also the unmatched."""
+    """Best counterpart pair for every small-side event; also the unmatched.
+
+    Comparison is restricted to large-side markets that share >=1 token with the
+    small market (matcher.token_index / matcher.candidates). This is exact — any
+    skipped pair shares no token and so scores 0.0 in similarity() — but turns
+    the old all-pairs scan (O(small x large): ~260M calls on politics) into a
+    near-linear one, which is what let the exhaustive politics run blow past 70
+    minutes without ever reaching the LLM step.
+    """
     matched: dict[str, CandidateMatch] = {}
     unmatched: list[str] = []
+    index = matcher.token_index(large_markets)
     for ev_title, ev_markets in small.items():
         best: CandidateMatch | None = None
         for sm in ev_markets:
-            for lg in large_markets:
-                score = matcher.similarity(sm, lg)
+            for lg in matcher.candidates(index, sm):
+                score = matcher.similarity_ge(sm, lg, threshold)
                 if score < threshold:
                     continue
                 if best is None or score > best.similarity:
@@ -94,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--similarity", type=float, default=0.4,
                    help="heuristic match threshold (default 0.4 — lower than "
                         "the batch scanner since the LLM checks everything)")
+    p.add_argument("--min-volume", type=float, default=10000.0,
+                   help="drop markets with volume <= this many dollars before "
+                        "matching (default 10000). Zero/near-zero-volume markets "
+                        "can't be an executable arb yet dominate the O(N^2) "
+                        "comparison cost on big sections (e.g. politics is ~half "
+                        "$0-volume dust). Clamped to a floor of $1 so dust is "
+                        "always excluded; lower it toward $1 for wider, slower "
+                        "coverage.")
     p.add_argument("--max-validations", type=int, default=0,
                    help="cap LLM calls (default 0 = validate every match)")
     p.add_argument("--size", type=int, default=1,
@@ -125,6 +149,19 @@ def main(argv: list[str] | None = None) -> int:
     contracts = max(1, args.size)
 
     pm, ks = fetch_everything(args.section)
+
+    # Drop untradeable-dust markets before matching. Volume is the strongest cheap
+    # signal here: a $0-volume market can never be an executable arb leg, and on a
+    # big section the dust is the overwhelming majority of the O(N^2) comparison
+    # cost. Floor at $1 so the $0 dust is always excluded even if --min-volume 0.
+    min_volume = max(1.0, args.min_volume)
+    n_pm_raw, n_ks_raw = len(pm), len(ks)
+    pm = [m for m in pm if m.volume > min_volume]
+    ks = [m for m in ks if m.volume > min_volume]
+    _eprint(f"Volume filter > ${min_volume:,.0f}: kept polymarket "
+            f"{len(pm)}/{n_pm_raw}, kalshi {len(ks)}/{n_ks_raw} "
+            f"(dropped {(n_pm_raw - len(pm)) + (n_ks_raw - len(ks))} dust markets).")
+
     pm_events = group_by_event(pm)
     ks_events = group_by_event(ks)
     _eprint(f"  polymarket: {len(pm_events)} events ({len(pm)} markets)   "
