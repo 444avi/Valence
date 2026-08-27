@@ -250,7 +250,12 @@ def main(argv: list[str] | None = None) -> int:
             if opp:
                 rec["cost"] = round(opp.cost, 4)
                 rec["profit"] = round(opp.profit, 4)
+                rec["roi"] = round(opp.roi, 4)
                 rec["confirmed"] = opp.confirmed
+                # The two legs carry the actionable side-to-buy per platform
+                # (YES/NO, price, fee); without them the UI can't say what to buy.
+                rec["legs"] = [asdict(leg) for leg in opp.legs]
+                rec["kalshi_fee_is_bound"] = opp.kalshi_fee_is_bound
                 rec["profit_kind"] = ("net_profit" if opp.confirmed
                                       else "indicative_edge_unconfirmed")
                 if opp.validation:

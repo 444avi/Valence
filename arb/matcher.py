@@ -114,12 +114,14 @@ def _finish_score(a: Market, b: Market, shared: frozenset[str],
     # text similarity alone can pair "Iraq wins" with "France wins" — opposite
     # propositions. Buying YES on one + NO on the other is then NOT a hedge but a
     # doubled-down bet. Identify the SUBJECT (the team named as the winner, i.e.
-    # the repeated one) and hard-penalize when the subjects disagree.
+    # the repeated one) and hard-penalize when the two markets' subjects are
+    # disjoint. Subjects are token SETS so multi-word teams ("South Africa") are
+    # compared as a unit rather than lost to an internal tie.
     na, nb = _normalize(a.question), _normalize(b.question)
     if " vs" in na and " vs" in nb:
-        sa = _versus_subject(a.question, shared)
-        sb = _versus_subject(b.question, shared)
-        if sa and sb and sa != sb:
+        sa = _versus_subjects(a.question, shared)
+        sb = _versus_subjects(b.question, shared)
+        if sa and sb and sa.isdisjoint(sb):
             score *= 0.25
 
     return score
@@ -173,25 +175,29 @@ def _is_draw(text: str) -> bool:
     return bool(_tokens(text) & _DRAW_WORDS)
 
 
-def _versus_subject(text: str, shared: frozenset[str]) -> str | None:
-    """The winner-subject of a 'vs' market: the shared token (team) that recurs
-    most in the text. "France vs Iraq — Iraq" -> 'iraq'.
+def _versus_subjects(text: str, shared: frozenset[str]) -> frozenset[str]:
+    """The winner-subject of a 'vs' market: the shared token(s) repeated MOST in
+    the text (the winner is appended, so its tokens recur). "France vs Iraq Iraq"
+    -> {'iraq'}.
 
-    Deterministic: candidates are ranked by (count desc, token asc) so the
-    result never depends on set iteration order / PYTHONHASHSEED. On a tie for
-    the top count the subject is ambiguous, so we return None and the caller
-    abstains from the penalty rather than applying it on a coin flip.
+    Returns a SET, not a single token, so a MULTI-WORD team survives intact:
+    "Namibia vs South Africa South Africa" -> {'south', 'africa'}. The old
+    single-token version tied 'south' and 'africa' and abstained, which let
+    "Namibia wins" match "South Africa wins" — opposite propositions dressed up
+    as an arbitrage. Empty when nothing is repeated (top count 1): no side is
+    singled out as the winner, so the caller abstains.
+
+    Deterministic: membership is by count value, independent of set iteration
+    order / PYTHONHASHSEED.
     """
     if not shared:
-        return None
+        return frozenset()
     raw = _token_list(text)
-    ranked = sorted(
-        ((raw.count(tok), tok) for tok in shared),
-        key=lambda ct: (-ct[0], ct[1]),
-    )
-    if len(ranked) >= 2 and ranked[0][0] == ranked[1][0]:
-        return None  # tie => ambiguous subject; abstain
-    return ranked[0][1]
+    counts = {tok: raw.count(tok) for tok in shared}
+    top = max(counts.values())
+    if top < 2:
+        return frozenset()  # nothing repeated => no discernible winner-subject
+    return frozenset(tok for tok, c in counts.items() if c == top)
 
 
 def _bucket(markets: list[Market]) -> dict[str, list[Market]]:

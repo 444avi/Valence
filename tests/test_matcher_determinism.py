@@ -39,10 +39,34 @@ def test_similarity_is_hash_seed_independent():
     assert len(scores) == 1, f"non-deterministic across seeds: {scores}"
 
 
-def test_versus_subject_abstains_on_tie():
-    from arb.matcher import _versus_subject, _tokens
-    # Both teams appear once -> tie -> None (caller applies no penalty).
+def test_versus_subjects_identify_repeated_team():
+    from arb.matcher import _versus_subjects, _tokens
+    # Nothing repeated -> no winner singled out -> empty (caller applies no penalty).
     shared = _tokens("Arsenal vs Chelsea")
-    assert _versus_subject("Arsenal vs Chelsea", shared) is None
+    assert _versus_subjects("Arsenal vs Chelsea", shared) == frozenset()
     # Clear winner (repeated team) -> that team.
-    assert _versus_subject("Arsenal vs Chelsea Arsenal", shared) == "arsenal"
+    assert _versus_subjects("Arsenal vs Chelsea Arsenal", shared) == frozenset({"arsenal"})
+    # A MULTI-WORD winner survives as a set instead of tying to nothing.
+    sh2 = _tokens("Namibia vs South Africa")
+    assert _versus_subjects("Namibia vs South Africa South Africa", sh2) == frozenset(
+        {"south", "africa"}
+    )
+
+
+def test_reversed_subject_with_multiword_team_is_rejected():
+    """Regression: 'Namibia wins' vs 'South Africa wins' are OPPOSITE outcomes and
+    must not match as an arb. The reversed-subject guard used to abstain here
+    because 'South'/'Africa' tied, so the pair matched at ~0.63 and got confirmed
+    as a fake $5k arbitrage. With set-valued subjects it is hard-penalized."""
+    from arb.matcher import similarity
+    from arb.models import Market
+
+    def M(plat, q):
+        return Market(plat, "i", q, "", 0.5, 0.5, category="sports")
+
+    pm = M("polymarket", "Namibia vs South Africa Namibia")   # Namibia to win
+    ks = M("kalshi", "Namibia vs South Africa South Africa")   # South Africa to win
+    assert similarity(pm, ks) < 0.4, f"reversed subjects should be rejected: {similarity(pm, ks)}"
+    # Same winner on both sides must still match strongly.
+    ks_same = M("kalshi", "Namibia vs South Africa Namibia")
+    assert similarity(pm, ks_same) >= 0.4

@@ -41,9 +41,8 @@ function badge(r) {
 
 function legHtml(leg) {
   const unconf = leg.confirmed ? "" : '<span class="unconf" title="Gamma mid + haircut, not an executable ask">~</span>';
-  return `<span class="leg"><span class="plat">${esc(leg.platform)}</span>
-    ${esc(leg.side)} $${Number(leg.price).toFixed(3)}${unconf}
-    <span class="plat">fee $${Number(leg.fee).toFixed(4)}</span></span>`;
+  return `<span class="leg"><b>BUY ${esc(leg.platform)} ${esc(leg.side)}</b> @ $${Number(leg.price).toFixed(3)}${unconf}
+    <span class="plat">+ fee $${Number(leg.fee).toFixed(4)}</span></span>`;
 }
 
 function sizingHtml(s) {
@@ -72,7 +71,11 @@ function oppHtml(r) {
     : `<div class="profit"><span class="kind">not priced</span></div>`;
 
   const legs = Array.isArray(r.legs) && r.legs.length
-    ? `<div class="legs">${r.legs.map(legHtml).join("")}</div>`
+    ? `<div class="legs"><span class="legs-lab">To capture, buy both legs:</span>${r.legs.map(legHtml).join("")}${
+        typeof r.cost === "number"
+          ? `<span class="leg-total">total cost $${Number(r.cost).toFixed(3)} → $${money(r.profit)}/pair</span>`
+          : ""
+      }</div>`
     : "";
 
   const v = r.validation;
