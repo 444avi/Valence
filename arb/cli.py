@@ -49,7 +49,9 @@ def _opp_to_dict(opp: ArbOpportunity) -> dict:
 def _badge(opp: ArbOpportunity) -> str:
     v = opp.validation
     if v is None:
-        return ""
+        # Priced but the same-event/equivalent-payoff check never ran (e.g.
+        # --no-llm or beyond --max-validations): NOT a confirmed arb.
+        return "  [UNVALIDATED]"
     if not v.passed:
         return "  [different ❌]"
     if not opp.confirmed:
@@ -217,8 +219,12 @@ def main(argv: list[str] | None = None) -> int:
                 _eprint(f"  [{i}/{n}] validation error: {e}")
 
     # Position-size the confirmed, same-event arbs (walks both order books).
+    # A confirmed arbitrage requires BOTH an executable positive edge (`realized`)
+    # AND a passed same-event / equivalent-payoff validation. Skipping the LLM
+    # (--no-llm) yields raw priced candidates, never confirmed arbs: without the
+    # event check, `profit = 1 - cost` is not risk-free (the legs may not hedge).
     realized = [o for o in opps if o.realized
-                and (args.no_llm or (o.validation and o.validation.passed))]
+                and o.validation is not None and o.validation.passed]
     if not args.no_sizing and realized:
         from . import sizing as sizing_mod
         scfg = sizing_mod.SizingConfig(impact_buffer=args.impact_buffer,

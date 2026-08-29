@@ -8,8 +8,8 @@ LLM cost toward near zero (see the implementation plan, section 8).
 
 This module is deliberately standalone and side-effect-free unless a cache
 database is configured via the environment, so the plain CLI (`python -m arb`)
-and `arb.live` keep their original, cache-free behavior and the existing tests
-are untouched. The web job runner turns the cache on by exporting:
+keeps its original, cache-free behavior and the existing tests are untouched.
+The web job runner turns the cache on by exporting:
 
     VALENCE_DB            path to the shared SQLite database (schema below)
     VALENCE_RUN_ID        the run whose real-call counter to increment

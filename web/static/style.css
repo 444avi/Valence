@@ -131,18 +131,21 @@ td.mono, .mono { font-family: var(--mono); }
 
 .opp { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1rem; }
 .opp.unconfirmed { border-left: 4px solid var(--warn); }
+.opp.unvalidated { border-left: 4px solid var(--warn); }
 .opp.confirmed { border-left: 4px solid var(--green); }
 .opp.different { border-left: 4px solid var(--grey); opacity: .8; }
 
 .opp-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .profit { font-family: var(--mono); font-size: 1.35rem; font-weight: 700; }
 .profit.pos { color: var(--green); }
+.profit.pending { color: var(--muted); }
 .profit.neg { color: var(--danger); }
 .profit .kind { display: block; font-size: .68rem; color: var(--muted); font-weight: 400; letter-spacing: .02em; text-transform: uppercase; }
 
 .badge { display: inline-block; padding: .3rem .7rem; border-radius: 7px; font-size: .8rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .badge.confirmed { background: var(--green); color: #04240f; }
 .badge.unconfirmed { background: var(--warn); color: #2a1800; box-shadow: 0 0 0 3px var(--warn-bg); }
+.badge.unvalidated { background: var(--warn); color: #2a1800; }
 .badge.different { background: var(--grey); color: #0c0f13; }
 .tag { display: inline-block; padding: .15rem .5rem; border-radius: 6px; font-size: .72rem; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); margin-left: .4rem; }
 

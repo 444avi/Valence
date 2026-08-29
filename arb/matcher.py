@@ -27,8 +27,8 @@ _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 # exceed the number of DISTINCT questions in a single run, or a large
 # same-section sweep (e.g. `arb.max --section politics`, ~34k markets) thrashes
 # the cache and recomputes tokens on nearly every similarity() call. It stays
-# bounded (not maxsize=None) so the long-lived `arb.live` monitor can't grow it
-# without limit as markets churn over days.
+# bounded (not maxsize=None) so a long-lived caller can't grow it without limit
+# as markets churn.
 _CACHE_MAX = 1 << 18  # 262144
 
 # Cross-platform team-name aliases (Kalshi says "USA", Polymarket "United

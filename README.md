@@ -156,71 +156,6 @@ unmatched list.
 | `--no-llm` | off | Heuristic matching only |
 | `--json` | off | JSON catalog (matched + unmatched) |
 
-## Live-game monitor
-
-```bash
-.venv/bin/python -m arb.live                        # all sports live right now
-.venv/bin/python -m arb.live --sport soccer         # one sport (much faster)
-.venv/bin/python -m arb.live --sport tennis,baseball --min-liquidity 20
-.venv/bin/python -m arb.live --include-upcoming 60  # + games starting within 1h
-.venv/bin/python -m arb.live --interval 3           # poll every 3s
-.venv/bin/python -m arb.live --all-markets          # include props, not just winner
-.venv/bin/python -m arb.live --no-llm               # skip resolution validation
-```
-
-By default only **game-outcome markets** are monitored — winner, draw, and
-team-to-advance — with props (O/U, spreads, BTTS, corners, exact score, player
-props, announcer mentions, …) filtered out on the Polymarket side to mirror
-Kalshi's game-winner series. `--all-markets` widens back to everything.
-
-`--sport` narrows both fetches server-side (Polymarket tag + Kalshi series
-subset), cutting scan+match time from minutes to seconds. Sports:
-`soccer, tennis, baseball, football, basketball, cricket, combat, esports,
-rugby` — aliases `mlb`, `nfl`, `nba`, `ufc`, `mma`, `boxing`, `world-cup` work
-too (mapping in [arb/categories.py](arb/categories.py)).
-
-Stages ([arb/live.py](arb/live.py)):
-
-1. **Scan** — find live games via Polymarket's `gameStartTime` (started, not
-   closed). `--include-upcoming N` widens to games starting within N minutes.
-2. **Match** — pair the live games' markets against Kalshi's game-winner series
-   using the same matcher/guards as the batch pipeline.
-3. **Validate** — one Claude Sonnet 4.6 (low effort) check per pair, ONCE,
-   before monitoring, confirming same event + equivalent payoff. Price checks
-   are not delegated to the LLM in the loop — the loop recomputes arb math
-   locally, so monitoring costs zero LLM tokens.
-4. **Monitor** — poll only the matched markets, batched into **one request per
-   platform per tick** (Kalshi `/markets?tickers=a,b,c`, Gamma
-   `/markets?id=..&id=..`). A line is printed whenever any tracked price moves
-   ≥1¢ (`--min-move`), with fee-adjusted cost/profit; positive profit is flagged
-   `*** ARBITRAGE ***`. Pairs with any ask under `--min-price` (default 2¢) are
-   skipped — a near-settled leg against a stale opposite book looks like an arb
-   but isn't executable. Ctrl+C to stop.
-
-The monitor watches **all** validated pairs concurrently (batched polling makes
-50 pairs cost the same as 1). Games are never "picked" — the only scarce
-resource is the LLM validation budget (`--max-validations`), and by default
-(`--prioritize thin`) it goes to the pairs with the **lowest combined
-liquidity** first: thin books reprice slowly and drift apart, so dislocations
-concentrate there. (PM reports `liquidityNum`; Kalshi's `liquidity_dollars` is
-unpopulated, so open interest is used as its thinness proxy; 0 = unreported.)
-`--prioritize sim` restores highest-similarity-first ordering.
-
-The flip side of thin-book arbs: the same emptiness that creates the
-dislocation caps what you can extract. A +10¢ arb on a book holding $0.05 of
-resting orders nets pennies — check the displayed liquidity before celebrating.
-
-### Rate limits
-
-The monitor is designed to stay far under both platforms' public limits: at the
-default 5s interval it makes ~0.4 requests/sec total (2 batched requests per
-tick regardless of how many pairs are tracked). Kalshi's public API allows on
-the order of 10 reads/sec on the basic (even unauthenticated) tier; Gamma is
-similarly tolerant of low-rate polling. If you want to poll faster or track
-many games, sign up for a Kalshi API key — authenticated access gets higher
-rate tiers and unlocks their WebSocket feed (true push updates, no polling).
-Polymarket's CLOB WebSocket is likewise the upgrade path on that side.
-
 ## Options
 
 ### Batch scanner (`python -m arb`)
@@ -246,26 +181,6 @@ Polymarket's CLOB WebSocket is likewise the upgrade path on that side.
 | `--no-llm` | off | Skip validation, report raw priced candidates |
 | `--json` | off | Emit JSON instead of human-readable output |
 
-### Live monitor (`python -m arb.live`)
-
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--sport` | all | Comma list of sports to scan (see list above; much faster) |
-| `--all-markets` | off | Include prop markets; default is outcome markets only |
-| `--min-liquidity` | 0 (off) | Skip pairs with reported liquidity below N dollars |
-| `--interval` | 5 | Seconds between polls (2 batched requests per poll) |
-| `--min-move` | 0.01 | Min price move (dollars) that triggers an update line |
-| `--min-price` | 0.02 | Skip pairs with any ask below this (near-settled guard) |
-| `--include-upcoming` | 0 | Also monitor games starting within N minutes |
-| `--prioritize` | thin | LLM budget order: `thin` (lowest liquidity first) or `sim` |
-| `--similarity` | 0.45 | Heuristic match threshold (0–1) |
-| `--max-validations` | 10 | Cap on Claude validation calls (one per pair, pre-monitor) |
-| `--size` | 1 | Order size (contracts) for per-contract economics |
-| `--pm-haircut` | 0.02 | Spread haircut on PM mids (live edges are never CLOB-confirmed) |
-| `--kalshi-fee` | 0.07 | Kalshi taker fee rate |
-| `--polymarket-fee` | (table) | Override every PM category with this flat rate |
-| `--no-llm` | off | Skip resolution validation (monitor all heuristic pairs) |
-
 ## How the arbitrage works
 
 For a binary event that resolves identically on both platforms, buy YES on one
@@ -278,6 +193,19 @@ profit = 1 - (yes_ask_A + no_ask_B + fee_A/size + fee_B/size)
 
 The tool computes both directions (PM-YES/KS-NO and KS-YES/PM-NO) and keeps the
 better one.
+
+**Reversed-polarity guard.** Both directions assume the two markets are phrased
+with the same YES-polarity — "YES here" and "YES there" mean the same outcome.
+The matcher only guarantees the same *topic*, so it will pair Polymarket "Will
+the Democrats win the WI governor race?" with Kalshi "Will the Republican party
+win?" — the same event from opposite sides. There, Kalshi-YES ("Republican
+wins") is the same bet as Polymarket-NO ("Democrats lose"), so "buy Kalshi YES +
+Polymarket NO" doubles one position instead of hedging, and the two cheap
+same-side legs masquerade as a fat arb. The engine detects this from the quotes
+— on a lopsided market the four prices fit the reversed pairing far better than
+the same-side one — and reports no arbitrage. Near 50/50, where a genuine arb
+and a reversed listing are numerically identical, it abstains and leans on the
+LLM validator instead ([arb/arbitrage.py](arb/arbitrage.py)).
 
 ## Fees
 
@@ -303,9 +231,7 @@ and max pipelines therefore screen on mids + a `--pm-haircut` (default 0.02/leg)
 and then confirm the survivors' true best-ask from the CLOB `/book` before
 pricing. Anything still priced from mids is marked `~` on the leg and labeled
 **UNCONFIRMED** — it never appears as realizable profit. Kalshi quotes are real
-order-book asks, so they are confirmed from the start. The live monitor polls
-Gamma mids every tick (CLOB per tick would be too many requests), so its edges
-are always flagged "INDICATIVE ARB (confirm on book)".
+order-book asks, so they are confirmed from the start.
 
 ## Position sizing
 
@@ -356,7 +282,6 @@ arb/
   validator.py   # Claude Sonnet 4.6 (low effort) structured validation
   models.py      # dataclasses
   cli.py         # batch pipeline: fetch -> match -> screen -> confirm -> validate
-  live.py        # live-game monitor: scan -> match -> validate -> poll/alert
   max.py         # exhaustive one-section coverage: smaller platform fully checked
   sizing.py      # order-book walk: edge-exhaustion + depth-ceiling max position
 tests/           # pytest: fees, matcher determinism, pricing, validator, sizing

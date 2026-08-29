@@ -7,14 +7,51 @@ position is risk-free if the combined cost (prices + fees) is below $1.
   Direction A: Polymarket YES + Kalshi NO
   Direction B: Kalshi YES + Polymarket NO
 
-This assumes both markets resolve on the *same* underlying outcome with YES/NO
-meaning the same thing — which is exactly what the LLM validator checks.
+Both directions assume the two markets are phrased with the SAME YES-polarity,
+i.e. "YES here" and "YES there" mean the same real-world outcome, so YES+NO is a
+hedge. The matcher only guarantees the pair is the same *topic*, not the same
+polarity: it happily pairs Polymarket "Will the Democrats win?" with Kalshi
+"Will the Republican party win?" — the SAME event phrased from OPPOSITE sides.
+There, Kalshi-YES ("Republican wins") means the SAME thing as Polymarket-NO
+("Democrats lose"), so "buy Kalshi YES + Polymarket NO" is one directional bet
+bought twice (2x exposure), NOT a hedge — and its cost (two cheap same-side
+legs) looks like a huge phantom arb. `_reversed_polarity` catches this from the
+prices and declines the pair; see `best_opportunity`.
 """
 
 from __future__ import annotations
 
 from .fees import FeeConfig, fee_for
 from .models import ArbLeg, ArbOpportunity, CandidateMatch
+
+# Reversed-polarity guard (see module docstring). Two markets on the same event
+# price the SAME outcome consistently, so the four indicative quotes fit either
+# the same-side pairing (pm_yes≈ks_yes) or the reversed one (pm_yes≈ks_no). When
+# the reversed fit is clearly better, the matcher has paired opposite sides and
+# YES+NO is not a hedge. Only decidable when the event is lopsided: near 50/50 a
+# genuine arb and a reversed listing yield identical prices, so we abstain there
+# and leave the call to the LLM validator.
+_POLARITY_MARGIN = 0.10   # reversed must fit the quotes this much better (dollars)
+_POLARITY_FLAT = 0.15     # abstain unless a side sits >this far from 0.50
+
+
+def _reversed_polarity(match: CandidateMatch) -> bool:
+    """True when the two matched markets are the same event phrased from OPPOSITE
+    sides, so buying YES on one and NO on the other doubles a bet instead of
+    hedging it. Judged purely from the indicative quotes (always present for a
+    tradeable pair); returns False whenever it cannot decide."""
+    pm, ks = match.polymarket, match.kalshi
+    y1, n1 = pm.yes_indicative, pm.no_indicative
+    y2, n2 = ks.yes_indicative, ks.no_indicative
+    if None in (y1, n1, y2, n2):
+        return False
+    # Near a coin flip the two hypotheses are numerically indistinguishable
+    # (a real arb looks exactly like a reversed listing); don't guess.
+    if abs(y1 - 0.5) < _POLARITY_FLAT:
+        return False
+    same_err = abs(y1 - y2) + abs(n1 - n2)   # fit if YES means the same thing
+    rev_err = abs(y1 - n2) + abs(n1 - y2)     # fit if the sides are reversed
+    return (same_err - rev_err) > _POLARITY_MARGIN
 
 
 def _direction(
@@ -64,7 +101,14 @@ def best_opportunity(
     contracts: int = 1,
     haircut: float = 0.02,
 ) -> ArbOpportunity | None:
-    """Return the more profitable of the two arb directions, if any priced."""
+    """Return the more profitable of the two arb directions, if any priced.
+
+    Returns None when the pair is the same event phrased from opposite sides
+    (`_reversed_polarity`): there is no YES+NO hedge to price, and the apparent
+    "profit" from the two same-side legs is a phantom, not risk-free money.
+    """
+    if _reversed_polarity(match):
+        return None
     candidates = [
         _direction(match, "polymarket", cfg, contracts, haircut),
         _direction(match, "kalshi", cfg, contracts, haircut),

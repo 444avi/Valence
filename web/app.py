@@ -1,9 +1,9 @@
 """Valence web layer: a job runner over the arb CLI, plus a static front end.
 
 Single FastAPI process, serving JSON and the UI from the same origin (no CORS).
-Every web-launched job is run-to-completion (`scan` or `max`); `arb.live` is out
-of scope. The run view polls GET /runs/{id} until status flips to done/failed —
-there is no streaming (plan §3).
+Every web-launched job is run-to-completion (`scan` or `max`). The run view
+polls GET /runs/{id} until status flips to done/failed — there is no streaming
+(plan §3).
 """
 
 from __future__ import annotations

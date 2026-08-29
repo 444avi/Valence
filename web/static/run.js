@@ -35,6 +35,10 @@ function badge(r) {
   if (v && !(v.same_event && v.equivalent_payoff))
     return { cls: "different", txt: "different event ❌" };
   if (!isPriced(r)) return { cls: "different", txt: "unpriced" };
+  // No validation ran (e.g. --no-llm, or beyond the --max-validations cap): the
+  // same-event/equivalent-payoff check is what makes profit=1-cost risk-free, so
+  // an unvalidated pair is NOT a confirmed arb no matter how the prices confirm.
+  if (!v) return { cls: "unvalidated", txt: "⚠ unvalidated" };
   if (r.confirmed) return { cls: "confirmed", txt: "confirmed ✅" };
   return { cls: "unconfirmed", txt: "⚠ unconfirmed" };
 }
@@ -61,8 +65,14 @@ function oppHtml(r) {
   const ks = r.kalshi || {};
   const b = badge(r);
   const priced = isPriced(r);
-  const profitCls = priced && r.profit > 0 ? "pos" : "neg";
-  const kindTxt = r.profit_kind === "net_profit" ? "net profit" : "indicative edge";
+  const v = r.validation;
+  const validated = !!(v && v.same_event && v.equivalent_payoff);
+  // Only a validated, positive edge is shown as green "net profit". An
+  // unvalidated edge is muted and labeled as such — it is not a confirmed arb.
+  const profitCls = priced && r.profit > 0 ? (validated ? "pos" : "pending") : "neg";
+  const kindTxt = !validated
+    ? "unvalidated edge"
+    : r.profit_kind === "net_profit" ? "net profit" : "indicative edge";
 
   const profitBlock = priced
     ? `<div class="profit ${profitCls}">$${money(r.profit)}<span class="kind">${kindTxt}${
@@ -78,7 +88,6 @@ function oppHtml(r) {
       }</div>`
     : "";
 
-  const v = r.validation;
   const llm = v
     ? `<div class="llm"><b>LLM:</b> same_event=${v.same_event} · equivalent_payoff=${v.equivalent_payoff} · conf=${Number(v.confidence).toFixed(2)}<br>${esc(v.reasoning)}${
         (v.caveats || []).map((c) => `<br><span style="color:var(--warn)">caveat:</span> ${esc(c)}`).join("")

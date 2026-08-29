@@ -82,36 +82,6 @@ KALSHI_GAME_SERIES: list[str] = [
 ]
 
 
-# Sport targeting for the live monitor: sport name -> (Polymarket tag slugs,
-# Kalshi game-winner series). Narrows both fetches server-side, so a targeted
-# scan is much faster than the full sweep. Names are what a user would type.
-SPORT_MAP: dict[str, tuple[list[str], list[str]]] = {
-    "soccer": (["soccer"],
-               ["KXWCGAME", "KXWCADVANCE", "KXBOLPDIVGAME", "KXISLGAME",
-                "KXUSLGAME", "KXUSLCUPGAME"]),
-    "tennis": (["tennis"],
-               ["KXATPMATCH", "KXWTAMATCH", "KXITFMATCH", "KXITFWMATCH",
-                "KXATPCHALLENGERMATCH"]),
-    "baseball": (["mlb", "baseball"],
-                 ["KXMLBGAME", "KXKBOGAME", "KXNPBGAME", "KXBSNGAME",
-                  "KXVBAGAME"]),
-    "football": (["nfl"], ["KXNFLGAME", "KXNCAAFGAME", "KXCFLGAME"]),
-    "basketball": (["nba", "basketball"],
-                   ["KXWNBAGAME", "KXACBGAME", "KXNZNBLGAME",
-                    "KXLNBELITEGAME"]),
-    "cricket": (["cricket"], ["KXWT20MATCH", "KXT20MATCH"]),
-    "combat": (["ufc", "mma", "boxing"], ["KXBOXING", "KXUFCFIGHT"]),
-    "esports": (["esports"],
-                ["KXCS2GAME", "KXVALORANTGAME", "KXDOTA2GAME", "KXR6GAME",
-                 "KXOWGAME"]),
-    "rugby": (["rugby"], ["KXRUGBYNRLMATCH"]),
-}
-# Friendly aliases.
-SPORT_ALIASES = {"mlb": "baseball", "nfl": "football", "nba": "basketball",
-                 "ufc": "combat", "mma": "combat", "boxing": "combat",
-                 "world-cup": "soccer", "futbol": "soccer"}
-
-
 def looks_crypto(text: str) -> bool:
     toks = set(text.lower().replace("?", " ").replace(",", " ").split())
     return bool(toks & _CRYPTO_KEYWORDS)

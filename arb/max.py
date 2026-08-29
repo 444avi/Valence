@@ -221,9 +221,12 @@ def main(argv: list[str] | None = None) -> int:
                 tag = f"error: {e}"
             _eprint(f"  [{i}/{len(todo)}] {tag}: {ev_title[:56]}")
 
-    # Position-size the confirmed, same-event arbs from the order books.
+    # Position-size the confirmed, same-event arbs from the order books. Requires
+    # a passed validation as well as an executable edge: --no-llm reports raw
+    # priced candidates, never confirmed arbs (the same-event check is what makes
+    # `profit = 1 - cost` risk-free), so nothing is sized without it.
     to_size = [o for o in opps.values() if o.realized
-               and (args.no_llm or (o.validation and o.validation.passed))]
+               and o.validation is not None and o.validation.passed]
     if not args.no_sizing and to_size:
         from . import sizing as sizing_mod
         scfg = sizing_mod.SizingConfig(impact_buffer=args.impact_buffer,
