@@ -3,19 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Valence — run</title>
+  <title>Valence — run result</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
-    <div class="brand">Valence <span>run result</span></div>
-    <a class="back" href="/">← all runs</a>
+    <div class="brand">
+      <a class="home" href="/">
+        <span class="logo"><i></i><i></i><i></i></span>
+        <b>Valence</b>
+      </a>
+      <span class="sep"></span>
+      <span class="org">Run Result</span>
+    </div>
+    <div class="head-right">
+      <span class="crumb" id="crumb">Screener / Run</span>
+      <span class="snap"><i></i> Live tunnel</span>
+    </div>
   </header>
 
-  <div class="wrap">
-    <div class="runmeta" id="runmeta"></div>
+  <main class="wrap">
+    <a class="back" href="/">← all runs</a>
+    <div class="detail-head" id="detail-head"></div>
+    <div class="meta-strip" id="runmeta"></div>
     <div id="body"><div class="empty">loading…</div></div>
-  </div>
+  </main>
+
+  <footer>
+    <span class="mono">Valence — Polymarket ⇄ Kalshi arbitrage screener</span>
+    <span class="mono">Single worker · run-to-completion · no streaming</span>
+  </footer>
 
   <script src="/static/run.js"></script>
 </body>

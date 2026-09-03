@@ -1,6 +1,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const esc = (s) =>
+  String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // ---- launch form -----------------------------------------------------------
 
@@ -10,10 +13,12 @@ function syncType() {
     el.style.display = el.dataset.for === t ? "" : "none";
   });
   const isMax = t === "max";
-  $("max-warn").style.display = isMax ? "block" : "none";
-  $("mv-note").textContent = isMax
-    ? "(required for max unless --no-llm)"
-    : "(optional; default 15)";
+  $("max-warn").style.display = isMax ? "flex" : "none";
+  $("mv-note").textContent = isMax ? "required unless --no-llm" : "default 15";
+  $("launch-kind").textContent = t;
+  document.querySelectorAll("#type-seg button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.type === t);
+  });
 }
 
 function collectArgs() {
@@ -103,10 +108,12 @@ function argSummary(args) {
   const parts = [];
   if (args.section) parts.push("section=" + args.section);
   if (args.sections) parts.push(args.sections);
-  if (args.min_volume != null) parts.push("minvol=$" + args.min_volume);
-  if (args.no_llm) parts.push("no-llm");
+  if (args.per_section != null) parts.push("cap=" + args.per_section);
+  if (args.min_profit != null) parts.push("min$" + args.min_profit);
+  if (args.min_volume != null) parts.push("vol≥$" + args.min_volume);
   if (args.max_validations != null) parts.push("mv=" + args.max_validations);
-  return parts.join(" · ") || "defaults";
+  if (args.no_llm) parts.push("no-llm");
+  return parts.join("  ·  ") || "defaults";
 }
 
 async function cancelRun(id, ev) {
@@ -118,30 +125,31 @@ async function cancelRun(id, ev) {
 
 function renderRuns(runs) {
   if (!runs.length) {
-    $("runlist").innerHTML = '<div class="empty">No runs yet.</div>';
+    $("runlist").innerHTML = '<div class="ledger"><div class="empty">No runs yet.</div></div>';
     return;
   }
   const rows = runs.map((r) => {
     const active = r.status === "running" || r.status === "queued";
-    const spin = active ? '<span class="spin"></span>' : "";
     const link =
       r.status === "done"
-        ? `<a href="/runs/${r.id}/view">results</a>`
+        ? `<a href="/runs/${r.id}/view">open →</a>`
         : active
-        ? `<button class="danger" onclick="cancelRun('${r.id}', event)">cancel</button>`
-        : "–";
-    return `<tr onclick="if(event.target.tagName!=='BUTTON'&&event.target.tagName!=='A'){location.href='/runs/${r.id}/view'}">
-      <td><b>${r.type}</b><div class="mono" style="font-size:.72rem;color:var(--grey)">${argSummary(r.args)}</div></td>
-      <td>${spin}<span class="status ${r.status}">${r.status}</span></td>
-      <td style="font-size:.8rem">${r.launched_by || "–"}</td>
-      <td class="mono">${fmtDuration(r.started_at, r.finished_at)}</td>
-      <td class="mono">${r.llm_calls}</td>
-      <td>${link}</td>
+        ? `<button class="mini-btn" onclick="cancelRun('${r.id}', event)">cancel</button>`
+        : `<span class="mono" style="color:var(--faint)">—</span>`;
+    return `<tr onclick="if(!['A','BUTTON'].includes(event.target.tagName)){location.href='/runs/${r.id}/view'}">
+      <td><div class="type">${esc(r.type)}</div><div class="args">${esc(argSummary(r.args))}</div></td>
+      <td><span class="chip ${esc(r.status)}"><i></i>${esc(r.status)}</span></td>
+      <td class="by">${esc(r.launched_by || "–")}</td>
+      <td class="r">${fmtDuration(r.started_at, r.finished_at)}</td>
+      <td class="r">${r.llm_calls}</td>
+      <td class="link-cell">${link}</td>
     </tr>`;
   });
-  $("runlist").innerHTML = `<table>
-    <thead><tr><th>Type</th><th>Status</th><th>By</th><th>Dur</th><th>LLM</th><th></th></tr></thead>
-    <tbody>${rows.join("")}</tbody></table>`;
+  $("runlist").innerHTML = `<div class="ledger"><table>
+    <thead><tr>
+      <th>Job</th><th>Status</th><th>Launched by</th><th class="r">Duration</th><th class="r">LLM</th><th></th>
+    </tr></thead>
+    <tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 let _pollTimer = null;
@@ -163,7 +171,12 @@ async function refresh() {
 
 // ---- init ------------------------------------------------------------------
 
-$("type").addEventListener("change", syncType);
+document.querySelectorAll("#type-seg button").forEach((b) => {
+  b.addEventListener("click", () => {
+    $("type").value = b.dataset.type;
+    syncType();
+  });
+});
 $("launch").addEventListener("click", launch);
 syncType();
 loadUsage();
