@@ -11,10 +11,19 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
+ADMIN = "avi@arboretuminvestments.net"
+ALICE = "alice@example.com"
+BOB = "bob@example.com"
+
+
+def access(email):
+    return {"Cf-Access-Authenticated-User-Email": email}
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("VALENCE_HOME", str(tmp_path))
+    monkeypatch.setenv("VALENCE_ADMIN_EMAIL", ADMIN)
     # Re-import config/db/app fresh so they bind to the tmp VALENCE_HOME.
     from web import config, db, jobs, app as app_mod
     importlib.reload(config)
@@ -93,7 +102,9 @@ def test_launch_records_attribution_and_completes(client):
     assert r.status_code == 202
     run_id = r.json()["id"]
 
-    detail = client.get(f"/runs/{run_id}").json()
+    detail = client.get(
+        f"/runs/{run_id}", headers=access("bob@arboretum.net")
+    ).json()
     assert detail["launched_by"] == "bob@arboretum.net"
     assert detail["status"] == "done"
     assert detail["result"] == []
@@ -123,3 +134,113 @@ def test_cancel_unknown_is_404(client):
 def test_health_and_usage(client):
     assert client.get("/health").json()["status"] == "ok"
     assert client.get("/usage").json()["month_to_date_llm_calls"] == 0
+
+
+# ------------------------------------------------------------- multi-user access
+
+def seed_run(run_id, email, llm_calls=0, status="done"):
+    from web import config, db
+
+    db.insert_run(run_id, "scan", "{}", email)
+    if status != "running":
+        result_path = str(config.blob_path(run_id)) if status == "done" else None
+        if result_path:
+            config.blob_path(run_id).write_text("[]")
+        db.finish_run(run_id, status, 0, result_path)
+    conn = db.connect()
+    try:
+        conn.execute("UPDATE runs SET llm_calls=? WHERE id=?", (llm_calls, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_regular_user_only_lists_own_runs(client):
+    seed_run("alice-run", ALICE, llm_calls=3)
+    seed_run("bob-run", BOB, llm_calls=7)
+
+    response = client.get("/runs", headers=access("  ALICE@example.com "))
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["vary"] == "Cf-Access-Authenticated-User-Email"
+    assert [run["id"] for run in response.json()["runs"]] == ["alice-run"]
+
+    assert client.get(
+        "/runs", params={"user": BOB}, headers=access(ALICE)
+    ).status_code == 403
+    assert client.get(
+        "/runs", params={"user": "all"}, headers=access(ALICE)
+    ).status_code == 403
+
+
+def test_regular_user_cannot_open_or_cancel_foreign_run(client):
+    seed_run("bob-run", BOB)
+
+    assert client.get("/runs/bob-run", headers=access(ALICE)).status_code == 404
+    assert client.get(
+        "/runs/bob-run/view", headers=access(ALICE)
+    ).status_code == 404
+    assert client.delete("/runs/bob-run", headers=access(ALICE)).status_code == 404
+
+
+def test_regular_user_usage_is_private(client):
+    seed_run("alice-run", ALICE, llm_calls=3)
+    seed_run("bob-run", BOB, llm_calls=7)
+
+    response = client.get("/usage", headers=access(ALICE))
+    assert response.status_code == 200
+    assert response.json() == {
+        "month_to_date_llm_calls": 3,
+        "scope": ALICE,
+    }
+    assert client.get(
+        "/usage", params={"user": BOB}, headers=access(ALICE)
+    ).status_code == 403
+
+
+def test_admin_can_filter_runs_and_see_selected_plus_total_usage(client):
+    seed_run("alice-run", ALICE, llm_calls=3)
+    seed_run("bob-run", BOB, llm_calls=7)
+
+    session = client.get("/session", headers=access(ADMIN)).json()
+    assert session["email"] == ADMIN
+    assert session["is_admin"] is True
+    assert session["users"] == [ALICE, ADMIN, BOB]
+
+    all_runs = client.get("/runs", headers=access(ADMIN)).json()["runs"]
+    assert {run["id"] for run in all_runs} == {"alice-run", "bob-run"}
+    alice_runs = client.get(
+        "/runs", params={"user": ALICE}, headers=access(ADMIN)
+    ).json()["runs"]
+    assert [run["id"] for run in alice_runs] == ["alice-run"]
+    assert client.get("/runs/bob-run", headers=access(ADMIN)).status_code == 200
+    assert client.get("/runs/bob-run/view", headers=access(ADMIN)).status_code == 200
+
+    alice_usage = client.get(
+        "/usage", params={"user": ALICE}, headers=access(ADMIN)
+    ).json()
+    assert alice_usage == {
+        "month_to_date_llm_calls": 3,
+        "scope": ALICE,
+        "total_month_to_date_llm_calls": 10,
+    }
+    total_usage = client.get("/usage", headers=access(ADMIN)).json()
+    assert total_usage["month_to_date_llm_calls"] == 10
+    assert total_usage["scope"] == "all"
+    assert total_usage["total_month_to_date_llm_calls"] == 10
+
+
+def test_regular_session_does_not_expose_user_directory(client):
+    seed_run("bob-run", BOB)
+    assert client.get("/session", headers=access(ALICE)).json() == {
+        "email": ALICE,
+        "is_admin": False,
+    }
+
+
+def test_health_does_not_expose_active_run_metadata(client):
+    seed_run("active-run", BOB, status="running")
+    health = client.get("/health").json()
+    assert health["active_run"] is True
+    assert BOB not in str(health)
+    assert "active-run" not in str(health)

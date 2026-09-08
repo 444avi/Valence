@@ -14,6 +14,7 @@ User=valence
 Group=valence
 WorkingDirectory=/opt/valence
 Environment=VALENCE_HOME=/var/lib/valence
+Environment=VALENCE_ADMIN_EMAIL=avi@arboretuminvestments.net
 # Optional cross-run cache TTL (days); belt-and-suspenders on the full-text hash.
 Environment=VALENCE_CACHE_TTL_DAYS=60
 
