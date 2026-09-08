@@ -110,13 +110,33 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
         conn.close()
 
 
-def list_runs(limit: int = 100) -> list[dict[str, Any]]:
+def list_runs(limit: int = 100, launched_by: Optional[str] = None) -> list[dict[str, Any]]:
+    conn = connect()
+    try:
+        if launched_by is None:
+            rows = conn.execute(
+                "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM runs WHERE launched_by = ? COLLATE NOCASE "
+                "ORDER BY started_at DESC LIMIT ?",
+                (launched_by, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_run_users() -> list[str]:
+    """Canonical emails that have launched a run, for the admin filter."""
     conn = connect()
     try:
         rows = conn.execute(
-            "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
+            "SELECT DISTINCT LOWER(TRIM(launched_by)) AS email FROM runs "
+            "WHERE TRIM(launched_by) != '' ORDER BY email"
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [str(row["email"]) for row in rows]
     finally:
         conn.close()
 
@@ -146,21 +166,29 @@ def last_successful_run_at() -> Optional[str]:
         conn.close()
 
 
-def month_to_date_llm_calls() -> int:
-    """Count *real* validator calls this month.
+def month_to_date_llm_calls(launched_by: Optional[str] = None) -> int:
+    """Sum *real* validator calls on runs started this month.
 
-    A cache hit never inserts a validations row, so counting rows by created_at
-    equals actual API calls — the same truth the per-run counter tracks, and the
-    reason we never infer cost from the result blob (plan §8).
+    Each cache miss increments its run's ``llm_calls`` counter in the same
+    transaction that stores the validation. Summing those counters is both the
+    cost truth and the only way to attribute usage to the user who launched it.
+    ``launched_by=None`` returns the all-user total.
     """
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     conn = connect()
     try:
-        (count,) = conn.execute(
-            "SELECT COUNT(*) FROM validations WHERE created_at >= ?",
-            (month_start.isoformat(),),
-        ).fetchone()
-        return int(count)
+        if launched_by is None:
+            (count,) = conn.execute(
+                "SELECT COALESCE(SUM(llm_calls), 0) FROM runs WHERE started_at >= ?",
+                (month_start.isoformat(),),
+            ).fetchone()
+        else:
+            (count,) = conn.execute(
+                "SELECT COALESCE(SUM(llm_calls), 0) FROM runs "
+                "WHERE started_at >= ? AND launched_by = ? COLLATE NOCASE",
+                (month_start.isoformat(), launched_by),
+            ).fetchone()
+        return int(count or 0)
     finally:
         conn.close()

@@ -34,6 +34,13 @@ JOB_TIMEOUT_SECONDS = int(os.environ.get("VALENCE_JOB_TIMEOUT_SECONDS") or "0")
 # only because the origin is unreachable except through the tunnel (plan §10).
 ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email"
 
+# The one account allowed to inspect runs and usage across user boundaries.
+# Keeping this configurable makes a future ownership change an operations edit,
+# not an application-code change. Email comparisons are case-insensitive.
+ADMIN_EMAIL = os.environ.get(
+    "VALENCE_ADMIN_EMAIL", "avi@arboretuminvestments.net"
+).strip().lower()
+
 # Fallback attribution when the header is absent (local dev, direct curl).
 UNKNOWN_USER = "unknown"
 

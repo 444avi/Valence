@@ -112,11 +112,16 @@ Already implemented and on by default for web-launched jobs. **Acceptance:**
 run the same scan twice; the second run's `llm_calls` drops sharply. Optionally
 tune `VALENCE_CACHE_TTL_DAYS` in the systemd unit (default 60).
 
-## Step 6 - Launch form + run list with attribution
+## Step 6 - Launch form + multi-user run ledger
 
-Already implemented. The run list polls `GET /runs`; a running job shows
-`running` until it finishes (no streaming). Attribution comes from the
-`Cf-Access-Authenticated-User-Email` header.
+Already implemented. Attribution comes from Cloudflare Access's
+`Cf-Access-Authenticated-User-Email` header. Regular users can list, open,
+cancel, and count usage only for their own runs; those checks are enforced by
+the API, not just hidden in the browser. The account configured by
+`VALENCE_ADMIN_EMAIL` (set to `avi@arboretuminvestments.net` in the systemd
+unit) can filter the ledger and month-to-date usage by user or view the combined
+total. The run list polls `GET /runs`; a running job shows `running` until it
+finishes (no streaming).
 
 ## Step 7 - Operations
 

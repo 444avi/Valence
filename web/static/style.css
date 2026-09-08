@@ -19,6 +19,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0; background: var(--cream); color: var(--ink);
@@ -81,6 +82,7 @@ header {
 }
 .usage .big { font-family: var(--mono); font-size: 2.6rem; font-weight: 500; line-height: 1; letter-spacing: -.03em; color: var(--coral); }
 .usage .sub { color: var(--muted); font-size: 12.5px; max-width: 26ch; }
+.usage .usage-total { margin-top: .45rem; font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-2); }
 .usage .foot { margin-top: .6rem; padding-top: .6rem; border-top: 1px solid var(--line-2); display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 
 /* ---------- launch panel (dark console) ---------- */
@@ -144,8 +146,13 @@ header {
 /* ---------- section head ---------- */
 .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; padding-bottom: .7rem; border-bottom: 1px solid var(--line); }
 .sec-head h2 { font-size: 1.35rem; font-weight: 700; letter-spacing: -.03em; margin: .25rem 0 0; }
+.ledger-actions { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; flex-wrap: wrap; }
+.admin-filter { display: flex; align-items: center; gap: .45rem; }
+.admin-filter label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.admin-filter select { max-width: 250px; border: 1px solid var(--line); border-radius: 3px; background: var(--paper); color: var(--ink-2); padding: .32rem 1.8rem .32rem .55rem; font-family: var(--mono); font-size: 10.5px; }
 .pillrow { display: flex; gap: .4rem; flex-wrap: wrap; }
 .pill { font-family: var(--mono); font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .28rem .65rem; background: var(--paper); }
+@media (max-width: 760px) { .sec-head { align-items: flex-start; flex-direction: column; } .ledger-actions { justify-content: flex-start; } }
 
 /* ---------- runs ledger ---------- */
 .ledger { background: var(--paper); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; box-shadow: var(--shadow); }

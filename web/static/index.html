@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Valence — arbitrage screener</title>
-  <link rel="stylesheet" href="/static/style.css?v=avilytics-1">
+  <link rel="stylesheet" href="/static/style.css?v=multiuser-1">
 </head>
 <body>
   <header>
@@ -34,10 +34,11 @@
             truly settle on the same event before it calls anything an arb.</p>
         </div>
         <div class="usage" title="Actual Anthropic API calls this month (cache misses only)">
-          <span class="eyebrow">LLM calls · month-to-date</span>
+          <span class="eyebrow" id="usage-label">LLM calls · month-to-date</span>
           <div class="big" id="usage-num">–</div>
-          <div class="sub">Real Anthropic calls billed this month — cache misses only.
+          <div class="sub" id="usage-sub">Real Anthropic calls billed this month — cache misses only.
             Validation is the spend; matching is free.</div>
+          <div class="usage-total" id="usage-total" hidden></div>
           <div class="foot"><span>Cache hits free</span><span>Live</span></div>
         </div>
       </div>
@@ -129,10 +130,16 @@
     <section>
       <div class="sec-head">
         <div><span class="eyebrow">02 / Ledger</span><h2>Recent runs</h2></div>
-        <div class="pillrow">
-          <span class="pill">1 worker slot</span>
-          <span class="pill">run-to-completion</span>
-          <span class="pill">poll · 2s</span>
+        <div class="ledger-actions">
+          <div class="admin-filter" id="admin-view" hidden>
+            <label for="user-filter">View runs for</label>
+            <select id="user-filter"></select>
+          </div>
+          <div class="pillrow">
+            <span class="pill">1 worker slot</span>
+            <span class="pill">run-to-completion</span>
+            <span class="pill">poll · 2s</span>
+          </div>
         </div>
       </div>
       <div id="runlist"><div class="empty">loading…</div></div>
@@ -144,6 +151,6 @@
     <span class="mono">Single worker · run-to-completion · no streaming</span>
   </footer>
 
-  <script src="/static/app.js?v=avilytics-1"></script>
+  <script src="/static/app.js?v=multiuser-1"></script>
 </body>
 </html>

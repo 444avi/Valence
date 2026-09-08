@@ -82,14 +82,57 @@ async function launch() {
 
 // ---- usage -----------------------------------------------------------------
 
+let _session = null;
+let _selectedUser = "all";
+
+function scopedUrl(path) {
+  if (!_session || !_session.is_admin || _selectedUser === "all") return path;
+  const join = path.includes("?") ? "&" : "?";
+  return path + join + "user=" + encodeURIComponent(_selectedUser);
+}
+
 async function loadUsage() {
   try {
-    const r = await fetch("/usage");
+    const r = await fetch(scopedUrl("/usage"));
     const d = await r.json();
     $("usage-num").textContent = d.month_to_date_llm_calls;
+    const allUsers = d.scope === "all";
+    $("usage-label").textContent = allUsers
+      ? "All users · LLM calls · month-to-date"
+      : d.scope + " · LLM calls · month-to-date";
+    $("usage-sub").textContent = allUsers
+      ? "Combined real Anthropic calls billed this month — cache misses only."
+      : "Real Anthropic calls billed to this user this month — cache misses only.";
+    if (_session && _session.is_admin) {
+      $("usage-total").hidden = false;
+      $("usage-total").textContent =
+        "All-user total · " + d.total_month_to_date_llm_calls + " calls MTD";
+    } else {
+      $("usage-total").hidden = true;
+    }
   } catch (_) {
     $("usage-num").textContent = "?";
   }
+}
+
+async function loadSession() {
+  const r = await fetch("/session");
+  if (!r.ok) throw new Error("could not load session");
+  _session = await r.json();
+  $("whoami").textContent = " · " + _session.email;
+  if (!_session.is_admin) return;
+
+  const filter = $("user-filter");
+  filter.replaceChildren(new Option("All users", "all"));
+  (_session.users || []).forEach((email) => {
+    filter.add(new Option(email, email));
+  });
+  filter.value = _selectedUser;
+  $("admin-view").hidden = false;
+  filter.addEventListener("change", () => {
+    _selectedUser = filter.value;
+    refresh();
+  });
 }
 
 // ---- run list --------------------------------------------------------------
@@ -155,7 +198,7 @@ function renderRuns(runs) {
 let _pollTimer = null;
 async function refresh() {
   try {
-    const r = await fetch("/runs?limit=50");
+    const r = await fetch(scopedUrl("/runs?limit=50"));
     const d = await r.json();
     renderRuns(d.runs);
     loadUsage();
@@ -179,5 +222,8 @@ document.querySelectorAll("#type-seg button").forEach((b) => {
 });
 $("launch").addEventListener("click", launch);
 syncType();
-loadUsage();
-refresh();
+loadSession()
+  .then(refresh)
+  .catch(() => {
+    $("runlist").innerHTML = '<div class="empty">Unable to identify the signed-in user.</div>';
+  });
