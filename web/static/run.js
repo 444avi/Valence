@@ -166,7 +166,6 @@ function diagHtml(rows) {
 }
 
 function renderHead(run) {
-  $("crumb").innerHTML = `Screener / Run <span class="who">${esc(run.id.slice(0, 6))}</span>`;
   const title =
     run.type === "max" ? "Exhaustive section sweep" : "Cross-venue scan";
   $("detail-head").innerHTML =
@@ -181,6 +180,12 @@ function renderHead(run) {
     kv("launched by", esc(run.launched_by)) +
     kv("real LLM calls", run.llm_calls) +
     kv("started", esc(run.started_at ? run.started_at.replace("T", " ").slice(0, 19) : "–"));
+}
+
+async function loadHeaderSession() {
+  const response = await authFetch("/session", {}, $("body"));
+  if (!response || !response.ok) return;
+  hydrateAccountHeader(await response.json());
 }
 
 function render(run) {
@@ -222,7 +227,8 @@ function render(run) {
 
 async function poll() {
   try {
-    const r = await fetch("/runs/" + RUN_ID);
+    const r = await authFetch("/runs/" + RUN_ID, {}, $("body"));
+    if (!r) return;
     if (r.status === 404) {
       $("body").innerHTML = '<div class="empty">Run not found.</div>';
       return;
@@ -235,4 +241,5 @@ async function poll() {
   }
 }
 
+loadHeaderSession();
 poll();

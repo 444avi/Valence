@@ -13,8 +13,16 @@ Type=exec
 User=valence
 Group=valence
 WorkingDirectory=/opt/valence
-Environment=VALENCE_HOME=/var/lib/valence
-Environment=VALENCE_ADMIN_EMAIL=avi@arboretuminvestments.net
+Environment=VALENCE_HOME=/data/valence
+# Set VALENCE_ADMIN_ACCOUNT_ID in a host-specific systemd drop-in after
+# resolving the owner's exact stable ID from Accounts. Never guess from email.
+Environment=ARBORETUM_ACCOUNTS_URL=https://accounts.arboretuminvestments.net
+Environment=ARBORETUM_ISSUER=https://accounts.arboretuminvestments.net
+Environment=ARBORETUM_AUDIENCE=arboretum-tools
+Environment=ARBORETUM_JWKS_URL=https://accounts.arboretuminvestments.net/.well-known/jwks.json
+Environment=ARBORETUM_COOKIE_NAME=arb_session
+Environment=ARBORETUM_ALLOWED_RETURN_HOSTS=valence.arboretuminvestments.net
+Environment=ARBORETUM_RETURN_ORIGIN=https://valence.arboretuminvestments.net
 # Optional cross-run cache TTL (days); belt-and-suspenders on the full-text hash.
 Environment=VALENCE_CACHE_TTL_DAYS=60
 
@@ -29,7 +37,7 @@ ExecStartPre=/opt/valence/.venv/bin/python -m pytest tests/ -q
 ExecStartPre=/opt/valence/deploy/scripts/fetch-secret.sh
 EnvironmentFile=-/run/valence/env
 
-ExecStart=/opt/valence/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8080
+ExecStart=/opt/valence/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8082
 
 Restart=always
 RestartSec=3
@@ -39,7 +47,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/valence /run/valence
+ReadWritePaths=/data/valence /run/valence
 RuntimeDirectory=valence
 RuntimeDirectoryMode=0750
 

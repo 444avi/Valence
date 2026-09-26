@@ -1,9 +1,9 @@
 # /etc/systemd/system/cloudflared.service
 # Named Cloudflare Tunnel. Dials OUTBOUND to Cloudflare, so the EC2 security
 # group needs zero inbound rules and there is no ALB, no public IP path, no
-# exposed SSH. This outbound-only posture is a security invariant, not just a
-# cost choice: it is what makes the Cf-Access-Authenticated-User-Email header
-# unforgeable (plan section 10). Do not add an inbound rule.
+# exposed SSH. This outbound-only posture is a transport security invariant,
+# not an authentication mechanism. Valence trusts only the signed arb_session
+# cookie issued by Arboretum Accounts. Do not add an inbound rule.
 [Unit]
 Description=Cloudflare Tunnel for Valence
 After=network-online.target

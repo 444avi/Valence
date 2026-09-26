@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at  TEXT,
     exit_code    INTEGER,
     launched_by  TEXT NOT NULL,
+    account_id   TEXT,
     result_path  TEXT,
     llm_calls    INTEGER NOT NULL DEFAULT 0
 );
@@ -56,6 +57,16 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(_SCHEMA)
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "account_id" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN account_id TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_account_id_started_at "
+            "ON runs (account_id, started_at DESC)"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -65,13 +76,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def insert_run(run_id: str, run_type: str, args_json: str, launched_by: str) -> None:
+def insert_run(
+    run_id: str,
+    run_type: str,
+    args_json: str,
+    account_id: str,
+    launched_by: str,
+) -> None:
     conn = connect()
     try:
         conn.execute(
-            "INSERT INTO runs (id, type, args, status, started_at, launched_by) "
-            "VALUES (?, ?, ?, 'running', ?, ?)",
-            (run_id, run_type, args_json, _now(), launched_by),
+            "INSERT INTO runs "
+            "(id, type, args, status, started_at, account_id, launched_by) "
+            "VALUES (?, ?, ?, 'running', ?, ?, ?)",
+            (run_id, run_type, args_json, _now(), account_id, launched_by),
         )
         conn.commit()
     finally:
@@ -110,33 +128,56 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
         conn.close()
 
 
-def list_runs(limit: int = 100, launched_by: Optional[str] = None) -> list[dict[str, Any]]:
+def claim_legacy_runs(account_id: str, email: str) -> int:
+    """One-time claim of email-only history by a verified Arboretum identity.
+
+    The null predicate is the safety boundary: an existing stable owner is
+    never changed, including when two account IDs present the same email.
+    """
     conn = connect()
     try:
-        if launched_by is None:
+        cursor = conn.execute(
+            "UPDATE runs SET account_id=? "
+            "WHERE account_id IS NULL AND launched_by = ? COLLATE NOCASE",
+            (account_id, email.strip()),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def list_runs(limit: int = 100, account_id: Optional[str] = None) -> list[dict[str, Any]]:
+    conn = connect()
+    try:
+        if account_id is None:
             rows = conn.execute(
                 "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM runs WHERE launched_by = ? COLLATE NOCASE "
+                "SELECT * FROM runs WHERE account_id = ? "
                 "ORDER BY started_at DESC LIMIT ?",
-                (launched_by, limit),
+                (account_id, limit),
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def list_run_users() -> list[str]:
-    """Canonical emails that have launched a run, for the admin filter."""
+def list_run_accounts() -> list[dict[str, str]]:
+    """Stable account IDs and current display emails for the admin filter."""
     conn = connect()
     try:
         rows = conn.execute(
-            "SELECT DISTINCT LOWER(TRIM(launched_by)) AS email FROM runs "
-            "WHERE TRIM(launched_by) != '' ORDER BY email"
+            "SELECT account_id, MAX(LOWER(TRIM(launched_by))) AS email "
+            "FROM runs WHERE account_id IS NOT NULL "
+            "GROUP BY account_id ORDER BY email, account_id"
         ).fetchall()
-        return [str(row["email"]) for row in rows]
+        return [
+            {"account_id": str(row["account_id"]), "email": str(row["email"])}
+            for row in rows
+        ]
     finally:
         conn.close()
 
@@ -166,19 +207,19 @@ def last_successful_run_at() -> Optional[str]:
         conn.close()
 
 
-def month_to_date_llm_calls(launched_by: Optional[str] = None) -> int:
+def month_to_date_llm_calls(account_id: Optional[str] = None) -> int:
     """Sum *real* validator calls on runs started this month.
 
     Each cache miss increments its run's ``llm_calls`` counter in the same
     transaction that stores the validation. Summing those counters is both the
     cost truth and the only way to attribute usage to the user who launched it.
-    ``launched_by=None`` returns the all-user total.
+    ``account_id=None`` returns the all-account total.
     """
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     conn = connect()
     try:
-        if launched_by is None:
+        if account_id is None:
             (count,) = conn.execute(
                 "SELECT COALESCE(SUM(llm_calls), 0) FROM runs WHERE started_at >= ?",
                 (month_start.isoformat(),),
@@ -186,8 +227,8 @@ def month_to_date_llm_calls(launched_by: Optional[str] = None) -> int:
         else:
             (count,) = conn.execute(
                 "SELECT COALESCE(SUM(llm_calls), 0) FROM runs "
-                "WHERE started_at >= ? AND launched_by = ? COLLATE NOCASE",
-                (month_start.isoformat(), launched_by),
+                "WHERE started_at >= ? AND account_id = ?",
+                (month_start.isoformat(), account_id),
             ).fetchone()
         return int(count or 0)
     finally:

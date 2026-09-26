@@ -1,8 +1,8 @@
 # Valence web deploy
 
-Wraps the `arb` CLI in a job-runner API + web UI, reachable only by the Arboretum
-team through a Cloudflare Tunnel. Follows the build sequence in
-`valence-web-implementation-plan.md`. Each step is verifiable before the next.
+Wraps the `arb` CLI in a job-runner API + web UI. Cloudflare Tunnel provides the
+transport path; signed `arb_session` cookies from Arboretum Accounts provide
+authentication. Valence requires the Max plan.
 
 The application code (the `web/` package, the validation cache in
 `arb/valcache.py`, and the tests) is done and runs locally today. What remains is
@@ -23,8 +23,15 @@ Run it locally:
 
 ```bash
 python -m pip install -r requirements.txt
-VALENCE_HOME=./var .venv/bin/uvicorn web.app:app --port 8080
-# open http://127.0.0.1:8080
+VALENCE_HOME=./var \
+ARBORETUM_ACCOUNTS_URL=https://accounts.arboretuminvestments.net \
+ARBORETUM_ISSUER=https://accounts.arboretuminvestments.net \
+ARBORETUM_AUDIENCE=arboretum-tools \
+ARBORETUM_JWKS_URL=https://accounts.arboretuminvestments.net/.well-known/jwks.json \
+ARBORETUM_COOKIE_NAME=arb_session \
+ARBORETUM_ALLOWED_RETURN_HOSTS=valence.arboretuminvestments.net \
+ARBORETUM_RETURN_ORIGIN=https://valence.arboretuminvestments.net \
+.venv/bin/uvicorn web.app:app --port 8082
 ```
 
 The cache and per-run LLM counter switch on automatically for web-launched jobs
@@ -32,9 +39,9 @@ The cache and per-run LLM counter switch on automatically for web-launched jobs
 
 ---
 
-## Step 1 - Access path (do this before any app code)
+## Access path
 
-Provision the host and put Cloudflare Access in front of it.
+Provision the host and connect the public hostname through Cloudflare Tunnel.
 
 ```bash
 aws cloudformation deploy \
@@ -50,13 +57,12 @@ Then, on the box (via `aws ssm start-session --target <InstanceId>` - no SSH):
 
 - Install `cloudflared`, create the named tunnel to
   `valence.arboretuminvestments.net`, drop `/etc/cloudflared/config.yml` (see
-  `cloudflared-config.yml.example`), enable `deploy/systemd/cloudflared.service`.
-- In the Cloudflare Zero Trust dashboard, add an **Access application** for that
-  hostname with a **Google Workspace domain policy** (allow
-  `@arboretuminvestments.net`).
+  `cloudflared-config.yml.example`), and enable `deploy/systemd/cloudflared.service`.
+- Do not use Cloudflare Access headers as identity. The origin verifies only the
+  signed Accounts session cookie.
 
-**Acceptance:** a hello-world page on `:8080` loads for a team Google account and
-is blocked in an incognito window.
+**Acceptance:** `/health` works through the tunnel, unauthenticated navigation is
+sent to Accounts, and a forged Cloudflare Access email header remains a 401.
 
 ## Step 2 - Deploy the repo
 
@@ -112,16 +118,44 @@ Already implemented and on by default for web-launched jobs. **Acceptance:**
 run the same scan twice; the second run's `llm_calls` drops sharply. Optionally
 tune `VALENCE_CACHE_TTL_DAYS` in the systemd unit (default 60).
 
-## Step 6 - Launch form + multi-user run ledger
+## Authentication, entitlement, and ownership
 
-Already implemented. Attribution comes from Cloudflare Access's
-`Cf-Access-Authenticated-User-Email` header. Regular users can list, open,
-cancel, and count usage only for their own runs; those checks are enforced by
-the API, not just hidden in the browser. The account configured by
-`VALENCE_ADMIN_EMAIL` (set to `avi@arboretuminvestments.net` in the systemd
-unit) can filter the ledger and month-to-date usage by user or view the combined
-total. The run list polls `GET /runs`; a running job shows `running` until it
-finishes (no streaming).
+All pages and data APIs except `/health` and static assets require a valid signed
+Accounts session with plan `max`. Free and Premium users receive a Max-required
+response. Regular users can list, open, cancel, and count usage only for runs
+owned by their stable Arboretum account ID. `VALENCE_ADMIN_ACCOUNT_ID` grants the
+existing cross-account operational view; plan or email alone never grants it.
+
+`db.init_db()` performs an additive migration by adding nullable
+`runs.account_id` and its index. On an authenticated request, legacy rows with a
+null account ID and the same verified email are claimed for that account. The
+update includes `account_id IS NULL`, so ownership is never reassigned. Keep the
+pre-deployment SQLite backup until this compatibility period is complete.
+
+Set `VALENCE_ADMIN_ACCOUNT_ID` in a host-specific systemd drop-in. Resolve the
+owner's exact stable ID from Accounts during deployment; do not commit a guessed
+ID or fall back to trusting a request email.
+
+Before deployment, make a SQLite-safe backup and retain the current unit and
+application tree. A typical production sequence is:
+
+```bash
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+sudo install -d -m 0750 /var/backups/valence/$STAMP
+sudo sqlite3 /data/valence/valence.db ".backup '/var/backups/valence/$STAMP/valence.db'"
+sudo sqlite3 /var/backups/valence/$STAMP/valence.db "PRAGMA integrity_check"
+sudo cp -a /opt/valence /var/backups/valence/$STAMP/app
+sudo cp -a /etc/systemd/system/valence-api.service /var/backups/valence/$STAMP/
+sudo -u valence /opt/valence/.venv/bin/pip install \
+  '/opt/valence/vendor/arboretum_auth-0.1.2-py3-none-any.whl[fastapi]'
+sudo -u valence /opt/valence/.venv/bin/python -m pytest tests/ -q
+sudo systemctl restart valence-api.service
+```
+
+Rollback restores the backed-up application and unit, reinstalls the dependency
+set recorded before deployment, and restarts the service. The database change is
+additive and old code ignores it; restore the SQLite snapshot only if the data
+itself is unexpectedly affected, while the service is stopped.
 
 ## Step 7 - Operations
 
@@ -139,9 +173,9 @@ finishes (no streaming).
 
 - **No trade execution, ever.** No wallet keys, no exchange write credentials.
   Blast radius on compromise is a screener and nothing more.
-- **Zero inbound security group.** The outbound-only tunnel is what makes the
-  `Cf-Access-Authenticated-User-Email` header trustworthy. Never add an ingress
-  rule or a direct public path to the API.
+- **Zero inbound security group.** Keep the outbound-only tunnel and never add
+  an ingress rule or direct public path. Authentication still comes only from
+  the signed Accounts session.
 - **Per-type argv whitelist.** `web/jobs.py` validates every flag against its
   type/choice set; user strings never reach argv raw. `scan` and `max` differ.
 - **Tests gate the boot.** `pytest tests/ -q` runs in `ExecStartPre`; a silent
