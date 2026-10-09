@@ -6,7 +6,11 @@ counting stub stands in for `_call_model`, which lets us assert exactly how many
 *real* calls each scenario incurs.
 """
 
+import json
 import sqlite3
+
+import anthropic
+import httpx
 
 import pytest
 
@@ -163,3 +167,75 @@ def test_question_hash_covers_all_four_fields():
     assert base != valcache.question_hash("q1", "d1", "Q2", "d2")
     assert base != valcache.question_hash("q1", "d1", "q2", "D2")
     assert base == valcache.question_hash("q1", "d1", "q2", "d2")
+
+
+def test_prompt_version_is_part_of_the_cache_key(monkeypatch):
+    """A prompt/model change must not reuse verdicts made under the old one."""
+    opp = _opp()
+    before = valcache.opp_question_hash(opp)
+    monkeypatch.setattr(validator, "PROMPT_VERSION", "some-later-version")
+    assert valcache.opp_question_hash(opp) != before
+
+
+# --- primary -> fallback model -------------------------------------------
+
+class _Block:
+    def __init__(self, type, text=""):
+        self.type, self.text = type, text
+
+
+class _Resp:
+    def __init__(self, stop_reason, text=None):
+        self.stop_reason = stop_reason
+        self.content = [_Block("thinking")] + ([_Block("text", text)] if text else [])
+
+
+class _FakeClient:
+    """Answers per model from a script; records which models were asked."""
+
+    def __init__(self, script):
+        self.script, self.asked = script, []
+        self.messages = self
+
+    def with_options(self, **_):
+        return self
+
+    def create(self, *, model, **_):
+        self.asked.append(model)
+        result = self.script[model]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+_OK = json.dumps({"polymarket_yes": "A wins", "kalshi_yes": "A wins", "reasoning": "same",
+                  "caveats": [], "same_event": True, "equivalent_payoff": True,
+                  "confidence": 0.9})
+
+
+def test_primary_answer_is_used_without_fallback():
+    client = _FakeClient({validator.MODEL: _Resp("end_turn", _OK)})
+    v = validator._call_model(_opp(), client)
+    assert v.passed and v.model == validator.MODEL
+    assert client.asked == [validator.MODEL]
+
+
+@pytest.mark.parametrize("primary", [
+    _Resp("refusal"),
+    _Resp("max_tokens"),
+    _Resp("end_turn", "not json"),
+    anthropic.APIConnectionError(request=httpx.Request("POST", "https://x")),
+])
+def test_primary_failure_falls_back(primary):
+    client = _FakeClient({validator.MODEL: primary,
+                          validator.FALLBACK_MODEL: _Resp("end_turn", _OK)})
+    v = validator._call_model(_opp(), client)
+    assert v.model == validator.FALLBACK_MODEL
+    assert client.asked == [validator.MODEL, validator.FALLBACK_MODEL]
+
+
+def test_both_failing_raises():
+    client = _FakeClient({validator.MODEL: _Resp("refusal"),
+                          validator.FALLBACK_MODEL: _Resp("refusal")})
+    with pytest.raises(Exception):
+        validator._call_model(_opp(), client)

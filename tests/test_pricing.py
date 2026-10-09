@@ -2,7 +2,7 @@
 
 from arb.arbitrage import best_opportunity
 from arb.fees import FeeConfig
-from arb.models import CandidateMatch, Market, Validation
+from arb.models import ArbLeg, ArbOpportunity, CandidateMatch, Market, Validation
 
 
 def _pm(yes_mid, no_mid, category="sports"):
@@ -126,5 +126,34 @@ def test_validator_schema_excludes_arbitrage_exists():
     assert "arbitrage_exists" not in _SCHEMA["properties"]
     assert "arbitrage_exists" not in _SCHEMA["required"]
     assert set(_SCHEMA["required"]) == {
+        "polymarket_yes", "kalshi_yes",
         "same_event", "equivalent_payoff", "confidence", "reasoning", "caveats",
     }
+
+
+def test_validator_schema_reasons_before_verdict():
+    # With the verdict first the model sometimes contradicts its own reasoning.
+    from arb.validator import _SCHEMA
+    order = list(_SCHEMA["properties"])
+    for verdict in ("same_event", "equivalent_payoff"):
+        assert order.index("reasoning") < order.index(verdict)
+        assert order.index("polymarket_yes") < order.index(verdict)
+        assert order.index("kalshi_yes") < order.index(verdict)
+
+
+def test_validator_prompt_hides_proposed_legs():
+    # The model compares YES conditions only; showing the YES/NO legs led it
+    # into payoff arithmetic it got wrong on opposite-side pairs.
+    from arb.validator import _build_prompt
+    pm = Market("polymarket", "pm", "Giants vs. Commanders Giants", "Giants win.",
+                yes_indicative=0.5, no_indicative=0.5, yes_ask=0.5, no_ask=0.5)
+    ks = Market("kalshi", "KX-WAS", "NY Giants vs WAS Commanders Washington",
+                "If Washington wins, Yes.", yes_indicative=0.5, no_indicative=0.5,
+                yes_ask=0.5, no_ask=0.5)
+    opp = ArbOpportunity(match=CandidateMatch(pm, ks, 0.9),
+                         legs=[ArbLeg("polymarket", "YES", 0.5, 0.0),
+                               ArbLeg("kalshi", "NO", 0.5, 0.0)],
+                         cost=1.0, profit=0.0, roi=0.0)
+    prompt = _build_prompt(opp)
+    assert "hedge" not in prompt.lower()
+    assert " NO" not in prompt

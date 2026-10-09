@@ -13,7 +13,7 @@ Within a selected canonical section:
      Comparison is via matcher.token_index/candidates + similarity_ge, so it only
      scores markets that share a token and skips the O(n^2) ratio() on pairs a
      cheap upper bound already rules out — near-linear instead of all-pairs.
-  5. LLM-verify every matched pair with Claude Sonnet 4.6 (low effort):
+  5. LLM-verify every matched pair with Claude Haiku 5.5 (high effort):
      same event + equivalent payoff, and whether an arb exists at current
      prices. Uncapped by default — this is the comprehensive mode — so the
      event count is printed up front as a cost signal; --max-validations N
@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_validations > 0:
             todo = todo[: args.max_validations]
         _eprint(f"Verifying {len(todo)} matched pairs with {validator.MODEL} "
-                "(low effort, one call each)...")
+                f"({validator.EFFORT} effort, one call each)...")
         for i, (ev_title, opp) in enumerate(todo, 1):
             try:
                 opp.validation = validator.validate(opp, client=client)

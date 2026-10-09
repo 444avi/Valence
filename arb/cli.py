@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
 
         client = anthropic.Anthropic()
         n = min(len(opps), args.max_validations)
-        _eprint(f"Validating top {n} with {validator.MODEL} (low effort)...")
+        _eprint(f"Validating top {n} with {validator.MODEL} ({validator.EFFORT} effort)...")
         for i, opp in enumerate(opps[:n], 1):
             try:
                 opp.validation = validator.validate(opp, client=client)
