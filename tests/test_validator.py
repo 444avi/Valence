@@ -188,24 +188,34 @@ class _Block:
         self.type, self.text = type, text
 
 
+class _Usage:
+    def __init__(self, input_tokens=150, cache_creation_input_tokens=0,
+                 cache_read_input_tokens=1400):
+        self.input_tokens = input_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
+
+
 class _Resp:
-    def __init__(self, stop_reason, text=None):
+    def __init__(self, stop_reason, text=None, usage=None):
         self.stop_reason = stop_reason
         self.content = [_Block("thinking")] + ([_Block("text", text)] if text else [])
+        self.usage = usage or _Usage()
 
 
 class _FakeClient:
     """Answers per model from a script; records which models were asked."""
 
     def __init__(self, script):
-        self.script, self.asked = script, []
+        self.script, self.asked, self.requests = script, [], []
         self.messages = self
 
     def with_options(self, **_):
         return self
 
-    def create(self, *, model, **_):
+    def create(self, *, model, **kwargs):
         self.asked.append(model)
+        self.requests.append(kwargs)
         result = self.script[model]
         if isinstance(result, Exception):
             raise result
@@ -243,3 +253,50 @@ def test_both_failing_raises():
                           validator.FALLBACK_MODEL: _Resp("refusal")})
     with pytest.raises(Exception):
         validator._call_model(_opp(), client)
+
+
+# --- prompt caching ------------------------------------------------------
+
+def test_system_prompt_carries_the_cache_breakpoint():
+    """The shared prefix (system + schema + thinking config) is cached with an
+    explicit breakpoint on the system block; the per-pair user message is not.
+    Top-level automatic caching would land the breakpoint on the unique user
+    message, so it must not be used."""
+    client = _FakeClient({validator.MODEL: _Resp("end_turn", _OK)})
+    validator._call_model(_opp(), client)
+    (req,) = client.requests
+    assert req["system"] == [{"type": "text", "text": validator._SYSTEM,
+                              "cache_control": {"type": "ephemeral"}}]
+    assert "cache_control" not in req
+    assert isinstance(req["messages"][0]["content"], str)  # no marker on it
+
+
+def test_prefix_is_identical_across_pairs():
+    """Everything before the user message must be byte-identical across calls,
+    or the cache never hits."""
+    client = _FakeClient({validator.MODEL: _Resp("end_turn", _OK)})
+    validator._call_model(_opp(), client)
+    validator._call_model(_opp(pm_q="X beats Y", ks_q="Will X beat Y?"), client)
+    a, b = ({k: v for k, v in r.items() if k != "messages"} for r in client.requests)
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    assert client.requests[0]["messages"] != client.requests[1]["messages"]
+
+
+def test_inert_cache_is_a_warning(caplog):
+    """A call that neither wrote nor read the cache means caching broke."""
+    inert = _Usage(input_tokens=1550, cache_creation_input_tokens=0,
+                   cache_read_input_tokens=0)
+    client = _FakeClient({validator.MODEL: _Resp("end_turn", _OK, usage=inert)})
+    with caplog.at_level("DEBUG", logger="arb.validator"):
+        validator._call_model(_opp(), client)
+    (rec,) = [r for r in caplog.records if "cache" in r.getMessage()]
+    assert rec.levelname == "WARNING"
+
+
+def test_cache_hit_logs_at_debug(caplog):
+    client = _FakeClient({validator.MODEL: _Resp("end_turn", _OK)})
+    with caplog.at_level("DEBUG", logger="arb.validator"):
+        validator._call_model(_opp(), client)
+    (rec,) = [r for r in caplog.records if "cache" in r.getMessage()]
+    assert rec.levelname == "DEBUG"
+    assert "read=1400" in rec.getMessage()

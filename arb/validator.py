@@ -105,16 +105,37 @@ class _NoVerdict(Exception):
     """The model answered but produced no usable verdict (refusal, truncation)."""
 
 
+def _log_cache_usage(model: str, usage) -> None:
+    """Log cache activity per call. Every call should either write the cached
+    prefix (first call in ~5 min) or read it; one that does neither means
+    caching broke (prefix changed per call, or fell below the model's minimum
+    cacheable length), so that case is a warning rather than debug noise."""
+    written = usage.cache_creation_input_tokens or 0
+    read = usage.cache_read_input_tokens or 0
+    level = logging.WARNING if written == 0 and read == 0 else logging.DEBUG
+    log.log(level, "validator: %s cache write=%d read=%d uncached_input=%d",
+            model, written, read, usage.input_tokens)
+
+
 def _ask(client: anthropic.Anthropic, model: str, effort: str,
          opp: ArbOpportunity) -> Validation:
     resp = client.with_options(timeout=TIMEOUT_S).messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
-        system=_SYSTEM,
+        # Prompt caching: system + schema + thinking config are identical on
+        # every call, so mark the end of the system prompt as the cache
+        # breakpoint. The per-pair user message comes after it and is never
+        # cached. Don't use top-level `cache_control=` (automatic caching): it
+        # would put the breakpoint on that unique user message, paying the
+        # write premium every call with no reads. Default 5-minute TTL fits:
+        # calls in a run are seconds apart. Keep everything before the user
+        # message byte-identical across calls or the cache stops hitting.
+        system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
         thinking={"type": "adaptive"},
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": _SCHEMA}},
         messages=[{"role": "user", "content": _build_prompt(opp)}],
     )
+    _log_cache_usage(model, resp.usage)
     if resp.stop_reason in ("refusal", "max_tokens"):
         raise _NoVerdict(f"{model} stopped with {resp.stop_reason}")
     text = next((b.text for b in resp.content if b.type == "text"), None)
