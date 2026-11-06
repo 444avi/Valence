@@ -61,24 +61,31 @@ def _now() -> str:
 
 
 def question_hash(
-    pm_question: str, pm_description: str, ks_question: str, ks_description: str
+    pm_question: str, pm_description: str, ks_question: str, ks_description: str,
+    version: str = "",
 ) -> str:
     """sha256 of the exact text the validator sees, in a fixed order.
 
     Mirrors `validator._build_prompt`: both questions and both resolution
-    descriptions. Joined with a literal '|' so a field boundary can never be
-    forged by content that happens to contain the separator's neighbors.
+    descriptions, plus the validator's PROMPT_VERSION so a prompt, schema, or
+    model change never reuses a verdict produced under the old one. Joined with
+    a literal '|' so a field boundary can never be forged by content that
+    happens to contain the separator's neighbors.
     """
     blob = "|".join(
-        (pm_question or "", pm_description or "", ks_question or "", ks_description or "")
+        (pm_question or "", pm_description or "", ks_question or "", ks_description or "",
+         version or "")
     )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def opp_question_hash(opp: ArbOpportunity) -> str:
+    from .validator import PROMPT_VERSION
+
     pm = opp.match.polymarket
     ks = opp.match.kalshi
-    return question_hash(pm.question, pm.description, ks.question, ks.description)
+    return question_hash(pm.question, pm.description, ks.question, ks.description,
+                         PROMPT_VERSION)
 
 
 class ValidationCache:
@@ -103,13 +110,13 @@ class ValidationCache:
         ks_ticker = opp.match.kalshi.market_id
         qhash = opp_question_hash(opp)
         row = self._conn.execute(
-            "SELECT verdict, reasoning, created_at FROM validations "
+            "SELECT verdict, reasoning, model, created_at FROM validations "
             "WHERE pm_id=? AND ks_ticker=? AND question_hash=?",
             (pm_id, ks_ticker, qhash),
         ).fetchone()
         if row is None:
             return None
-        verdict_json, reasoning, created_at = row
+        verdict_json, reasoning, model, created_at = row
         if self._is_stale(created_at):
             return None
         data = json.loads(verdict_json)
@@ -119,6 +126,7 @@ class ValidationCache:
             confidence=float(data["confidence"]),
             reasoning=reasoning,
             caveats=list(data.get("caveats", [])),
+            model=model,
         )
 
     def _is_stale(self, created_at: str) -> bool:

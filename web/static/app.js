@@ -58,11 +58,12 @@ async function launch() {
 
   btn.disabled = true;
   try {
-    const res = await fetch("/runs", {
+    const res = await authFetch("/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, msg);
+    if (!res) return;
     const data = await res.json();
     if (!res.ok) {
       msg.className = "msg err";
@@ -93,13 +94,17 @@ function scopedUrl(path) {
 
 async function loadUsage() {
   try {
-    const r = await fetch(scopedUrl("/usage"));
+    const r = await authFetch(scopedUrl("/usage"), {}, document.querySelector(".usage"));
+    if (!r) return;
     const d = await r.json();
     $("usage-num").textContent = d.month_to_date_llm_calls;
     const allUsers = d.scope === "all";
+    const scopeLabel = _session && _session.is_admin
+      ? ($("user-filter").selectedOptions[0]?.textContent || d.scope)
+      : (_session?.email || d.scope);
     $("usage-label").textContent = allUsers
       ? "All users · LLM calls · month-to-date"
-      : d.scope + " · LLM calls · month-to-date";
+      : scopeLabel + " · LLM calls · month-to-date";
     $("usage-sub").textContent = allUsers
       ? "Combined real Anthropic calls billed this month — cache misses only."
       : "Real Anthropic calls billed to this user this month — cache misses only.";
@@ -116,16 +121,17 @@ async function loadUsage() {
 }
 
 async function loadSession() {
-  const r = await fetch("/session");
+  const r = await authFetch("/session", {}, $("runlist"));
+  if (!r) return false;
   if (!r.ok) throw new Error("could not load session");
   _session = await r.json();
-  $("whoami").textContent = " · " + _session.email;
-  if (!_session.is_admin) return;
+  hydrateAccountHeader(_session);
+  if (!_session.is_admin) return true;
 
   const filter = $("user-filter");
   filter.replaceChildren(new Option("All users", "all"));
-  (_session.users || []).forEach((email) => {
-    filter.add(new Option(email, email));
+  (_session.users || []).forEach((user) => {
+    filter.add(new Option(user.email, user.account_id));
   });
   filter.value = _selectedUser;
   $("admin-view").hidden = false;
@@ -133,6 +139,7 @@ async function loadSession() {
     _selectedUser = filter.value;
     refresh();
   });
+  return true;
 }
 
 // ---- run list --------------------------------------------------------------
@@ -162,7 +169,12 @@ function argSummary(args) {
 async function cancelRun(id, ev) {
   ev.stopPropagation();
   if (!confirm("Cancel run " + id + "?")) return;
-  await fetch("/runs/" + id, { method: "DELETE" });
+  const response = await authFetch(
+    "/runs/" + id,
+    { method: "DELETE" },
+    $("runlist"),
+  );
+  if (!response) return;
   refresh();
 }
 
@@ -198,7 +210,8 @@ function renderRuns(runs) {
 let _pollTimer = null;
 async function refresh() {
   try {
-    const r = await fetch(scopedUrl("/runs?limit=50"));
+    const r = await authFetch(scopedUrl("/runs?limit=50"), {}, $("runlist"));
+    if (!r) return;
     const d = await r.json();
     renderRuns(d.runs);
     loadUsage();
@@ -223,7 +236,7 @@ document.querySelectorAll("#type-seg button").forEach((b) => {
 $("launch").addEventListener("click", launch);
 syncType();
 loadSession()
-  .then(refresh)
+  .then((ok) => { if (ok) refresh(); })
   .catch(() => {
     $("runlist").innerHTML = '<div class="empty">Unable to identify the signed-in user.</div>';
   });

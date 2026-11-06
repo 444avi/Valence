@@ -5,12 +5,12 @@
 #   cloudflared tunnel create valence
 #   cloudflared tunnel route dns valence valence.arboretuminvestments.net
 #
-# Then point ingress at the local API. The API binds 127.0.0.1:8080 only.
+# Then point ingress at the local API. The API binds 127.0.0.1:8082 only.
 
 tunnel: valence
 credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
 
 ingress:
   - hostname: valence.arboretuminvestments.net
-    service: http://127.0.0.1:8080
+    service: http://127.0.0.1:8082
   - service: http_status:404

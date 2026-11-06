@@ -23,8 +23,12 @@ function isPriced(r) {
   return typeof r.profit === "number";
 }
 
+// Confirmed arbs first, then everything by edge (unpriced last).
 function sortRows(rows) {
   return rows.slice().sort((a, b) => {
+    const ca = isConfirmedArb(a) ? 1 : 0;
+    const cb = isConfirmedArb(b) ? 1 : 0;
+    if (ca !== cb) return cb - ca;
     const pa = isPriced(a) ? a.profit : -Infinity;
     const pb = isPriced(b) ? b.profit : -Infinity;
     return pb - pa;
@@ -152,7 +156,7 @@ function isConfirmedArb(r) {
 function diagHtml(rows) {
   const priced = rows.filter(isPriced);
   const confirmed = priced.filter(isConfirmedArb);
-  const best = priced.reduce((m, r) => Math.max(m, r.profit > 0 ? r.profit : -Infinity), 0);
+  const best = confirmed.reduce((m, r) => Math.max(m, r.profit), 0);
   const captured = confirmed.reduce((s, r) => s + (r.sizing ? r.sizing.profit_at_recommended : 0), 0);
   const tiles = [
     { k: "Candidates", val: String(rows.length), note: "pairs surfaced", cls: "" },
@@ -166,7 +170,6 @@ function diagHtml(rows) {
 }
 
 function renderHead(run) {
-  $("crumb").innerHTML = `Screener / Run <span class="who">${esc(run.id.slice(0, 6))}</span>`;
   const title =
     run.type === "max" ? "Exhaustive section sweep" : "Cross-venue scan";
   $("detail-head").innerHTML =
@@ -181,6 +184,12 @@ function renderHead(run) {
     kv("launched by", esc(run.launched_by)) +
     kv("real LLM calls", run.llm_calls) +
     kv("started", esc(run.started_at ? run.started_at.replace("T", " ").slice(0, 19) : "–"));
+}
+
+async function loadHeaderSession() {
+  const response = await authFetch("/session", {}, $("body"));
+  if (!response || !response.ok) return;
+  hydrateAccountHeader(await response.json());
 }
 
 function render(run) {
@@ -214,7 +223,7 @@ function render(run) {
     : "";
   body.innerHTML =
     diagHtml(rows) +
-    `<span class="subsec">${rows.length} candidate${rows.length === 1 ? "" : "s"} · sorted by edge</span>` +
+    `<span class="subsec">${rows.length} candidate${rows.length === 1 ? "" : "s"} · confirmed first, then by edge</span>` +
     oppsHtml +
     unmatchedHtml;
   return false;
@@ -222,7 +231,8 @@ function render(run) {
 
 async function poll() {
   try {
-    const r = await fetch("/runs/" + RUN_ID);
+    const r = await authFetch("/runs/" + RUN_ID, {}, $("body"));
+    if (!r) return;
     if (r.status === 404) {
       $("body").innerHTML = '<div class="empty">Run not found.</div>';
       return;
@@ -235,4 +245,5 @@ async function poll() {
   }
 }
 
+loadHeaderSession();
 poll();

@@ -18,8 +18,8 @@ It works in stages:
    order book before any LLM spend. Fees are modeled per platform and per
    category (see [Fees](#fees)). A number is only ever reported as realizable
    profit once its prices are CLOB-confirmed.
-3. **LLM validation** — [Claude Sonnet 4.6](https://www.anthropic.com) at **low
-   effort** judges only what the math can't: do the two markets resolve on the
+3. **LLM validation** — [Claude Haiku 5.5](https://www.anthropic.com) at **high
+   effort** (falling back to Claude Sonnet 4.6) judges only what the math can't: do the two markets resolve on the
    *same* event with YES/NO meaning the same thing (so the hedge is real)? It is
    deliberately **not** asked whether a profit exists — it has no independent
    view of fees or prices, so that decision stays with the (independent) fee
@@ -279,7 +279,7 @@ arb/
   matcher.py     # heuristic text matching (token-index blocking) -> candidate pairs
   fees.py        # platform fee models
   arbitrage.py   # two-leg arb math, net of fees
-  validator.py   # Claude Sonnet 4.6 (low effort) structured validation
+  validator.py   # Claude Haiku 5.5 (high effort) structured validation, Sonnet 4.6 fallback
   models.py      # dataclasses
   cli.py         # batch pipeline: fetch -> match -> screen -> confirm -> validate
   max.py         # exhaustive one-section coverage: smaller platform fully checked

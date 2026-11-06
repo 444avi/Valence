@@ -5,3 +5,6 @@ python-dotenv>=1.0.0
 # Web layer (web/): job runner API + static UI. arb/ itself needs none of these.
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
+
+# Canonical signed-session verifier, vendored for reproducible deployments.
+./vendor/arboretum_auth-0.1.2-py3-none-any.whl[fastapi]

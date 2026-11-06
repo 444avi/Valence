@@ -133,6 +133,7 @@ class Validation:
     confidence: float
     reasoning: str
     caveats: list[str] = field(default_factory=list)
+    model: str = ""   # which model produced the verdict (primary or fallback)
 
     @property
     def passed(self) -> bool:

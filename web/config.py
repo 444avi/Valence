@@ -1,8 +1,8 @@
 """Runtime configuration and filesystem layout for the Valence web layer.
 
 Everything is driven by environment variables so the same code runs on the box
-(defaults target /var/lib/valence, matching the systemd unit and the plan's data
-model) and locally for development (export VALENCE_HOME to a writable path).
+(defaults target /data/valence, matching production) and locally for development
+(export VALENCE_HOME to a writable path).
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from pathlib import Path
 # imports resolve, and we invoke the venv python that launched the API.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Data home: SQLite DB + result blobs. /var/lib/valence on the box (see plan §5).
-HOME = Path(os.environ.get("VALENCE_HOME", "/var/lib/valence"))
+# Data home: SQLite DB + result blobs.
+HOME = Path(os.environ.get("VALENCE_HOME", "/data/valence"))
 DB_PATH = HOME / "valence.db"
 RUNS_DIR = HOME / "runs"
 
@@ -30,19 +30,10 @@ CACHE_TTL_DAYS = os.environ.get("VALENCE_CACHE_TTL_DAYS", "") or None
 # a default limit.
 JOB_TIMEOUT_SECONDS = int(os.environ.get("VALENCE_JOB_TIMEOUT_SECONDS") or "0")
 
-# Header Cloudflare Access injects with the authenticated user's email. Trusted
-# only because the origin is unreachable except through the tunnel (plan §10).
-ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email"
-
-# The one account allowed to inspect runs and usage across user boundaries.
-# Keeping this configurable makes a future ownership change an operations edit,
-# not an application-code change. Email comparisons are case-insensitive.
-ADMIN_EMAIL = os.environ.get(
-    "VALENCE_ADMIN_EMAIL", "avi@arboretuminvestments.net"
-).strip().lower()
-
-# Fallback attribution when the header is absent (local dev, direct curl).
-UNKNOWN_USER = "unknown"
+# The one stable Arboretum account ID allowed to inspect runs and usage across
+# account boundaries. Max entitlement alone never grants administrator access.
+# An empty value safely disables administrator behavior.
+ADMIN_ACCOUNT_ID = os.environ.get("VALENCE_ADMIN_ACCOUNT_ID", "").strip()
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 

@@ -5,7 +5,7 @@
 # copying the live file. The instance role grants s3:PutObject on this bucket only.
 set -euo pipefail
 
-HOME_DIR="${VALENCE_HOME:-/var/lib/valence}"
+HOME_DIR="${VALENCE_HOME:-/data/valence}"
 DB="${HOME_DIR}/valence.db"
 RUNS_DIR="${HOME_DIR}/runs"
 BUCKET="${VALENCE_BACKUP_BUCKET:?set VALENCE_BACKUP_BUCKET}"

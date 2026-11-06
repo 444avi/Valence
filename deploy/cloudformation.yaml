@@ -125,7 +125,7 @@ Resources:
           dnf -y update
           dnf -y install git python3.12 python3.12-pip sqlite
           id valence >/dev/null 2>&1 || useradd --system --home /opt/valence --shell /usr/sbin/nologin valence
-          install -d -o valence -g valence /var/lib/valence /opt/valence
+          install -d -o valence -g valence /data/valence /opt/valence
           # App deploy (clone, venv, systemd enable) is done manually per
           # deploy/README.md so a bad rollout never bricks the boot.
 
